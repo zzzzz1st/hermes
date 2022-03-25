@@ -16,8 +16,8 @@ import java.util.stream.StreamSupport;
 
 import static java.util.stream.Collectors.toSet;
 
-public class AvailableWork extends Spliterators.AbstractSpliterator<SubscriptionAssignment> {
-    private SubscriptionAssignmentView state;
+class AvailableWork extends Spliterators.AbstractSpliterator<SubscriptionAssignment> {
+    private final SubscriptionAssignmentView state;
     private final WorkloadConstraints constraints;
 
     private AvailableWork(SubscriptionAssignmentView state, WorkloadConstraints constraints) {

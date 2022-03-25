@@ -14,10 +14,10 @@ import pl.allegro.tech.hermes.common.di.factories.ModelAwareZookeeperNotifyingCa
 import pl.allegro.tech.hermes.common.di.factories.WorkloadConstraintsRepositoryFactory;
 import pl.allegro.tech.hermes.common.exception.InternalProcessingException;
 import pl.allegro.tech.hermes.common.metric.HermesMetrics;
-import pl.allegro.tech.hermes.consumers.consumer.offset.ConsumerPartitionAssignmentState;
-import pl.allegro.tech.hermes.consumers.consumer.offset.OffsetQueue;
 import pl.allegro.tech.hermes.consumers.config.SubscriptionConfiguration;
 import pl.allegro.tech.hermes.consumers.config.SupervisorConfiguration;
+import pl.allegro.tech.hermes.consumers.consumer.offset.ConsumerPartitionAssignmentState;
+import pl.allegro.tech.hermes.consumers.consumer.offset.OffsetQueue;
 import pl.allegro.tech.hermes.consumers.health.ConsumerMonitor;
 import pl.allegro.tech.hermes.consumers.message.undelivered.UndeliveredMessageLogPersister;
 import pl.allegro.tech.hermes.consumers.registry.ConsumerNodesRegistry;
@@ -32,7 +32,7 @@ import pl.allegro.tech.hermes.consumers.supervisor.ConsumersSupervisor;
 import pl.allegro.tech.hermes.consumers.supervisor.NonblockingConsumersSupervisor;
 import pl.allegro.tech.hermes.consumers.supervisor.monitor.ConsumersRuntimeMonitor;
 import pl.allegro.tech.hermes.consumers.supervisor.process.Retransmitter;
-import pl.allegro.tech.hermes.consumers.supervisor.workload.selective.SelectiveSupervisorController;
+import pl.allegro.tech.hermes.consumers.supervisor.workload.selective.SelectiveWorkBalancer;
 import pl.allegro.tech.hermes.domain.group.GroupRepository;
 import pl.allegro.tech.hermes.domain.notifications.InternalNotificationsBus;
 import pl.allegro.tech.hermes.domain.subscription.SubscriptionRepository;
@@ -85,7 +85,6 @@ class ConsumerTestRuntimeEnvironment {
     private ObjectMapper objectMapper = new ObjectMapper();
     private ExecutorService executorService = Executors.newSingleThreadExecutor();
     private Supplier<HermesMetrics> metricsSupplier;
-    private ConsumerNodesRegistry consumersRegistry;
     private WorkloadConstraintsRepository workloadConstraintsRepository;
     private CuratorFramework curator;
     private final ConsumerPartitionAssignmentState partitionAssignmentState;
@@ -111,8 +110,8 @@ class ConsumerTestRuntimeEnvironment {
         this.nodesRegistryPaths = new ConsumerNodesRegistryPaths(zookeeperPaths, CLUSTER_NAME);
     }
 
-    SelectiveSupervisorController findLeader(List<SelectiveSupervisorController> supervisors) {
-        return supervisors.stream().filter(SelectiveSupervisorController::isLeader).findAny().get();
+    SupervisorController findLeader(List<SupervisorController> supervisors) {
+        return supervisors.stream().filter(SupervisorController::isLeader).findAny().get();
     }
 
     private ConsumerControllers createConsumer(String consumerId) {
@@ -182,17 +181,18 @@ class ConsumerTestRuntimeEnvironment {
         );
 
 
-        SelectiveSupervisorController supervisor = new SelectiveSupervisorController(
+        SupervisorController supervisor = new SupervisorController(
                 consumersSupervisor, notificationsBus, subscriptionsCache, consumerAssignmentCache, consumerAssignmentRegistry,
                 clusterAssignmentCache, nodesRegistry,
                 mock(ZookeeperAdminCache.class), executorService, consumerConfig, metricsSupplier.get(),
-                workloadConstraintsRepository
+                workloadConstraintsRepository,
+                new SelectiveWorkBalancer()
         );
 
         return new ConsumerControllers(consumerAssignmentCache, supervisor);
     }
 
-    SelectiveSupervisorController spawnConsumer(String consumerId, ConfigFactory config, ConsumersSupervisor consumersSupervisor) {
+    SupervisorController spawnConsumer(String consumerId, ConfigFactory config, ConsumersSupervisor consumersSupervisor) {
         ConsumerControllers consumerControllers = createConsumer(consumerId, config, consumersSupervisor);
         return startNode(consumerControllers).supervisorController;
     }
@@ -239,17 +239,17 @@ class ConsumerTestRuntimeEnvironment {
         ).collect(toList());
     }
 
-    List<SelectiveSupervisorController> spawnConsumers(int howMany) {
+    List<SupervisorController> spawnConsumers(int howMany) {
         List<ConsumerControllers> nodes = createConsumers(howMany);
         nodes.forEach(this::startNode);
         return nodes.stream().map(ConsumerControllers::getSupervisorController).collect(toList());
     }
 
-    SelectiveSupervisorController spawnConsumer() {
+    SupervisorController spawnConsumer() {
         return spawnConsumers(1).get(0);
     }
 
-    void kill(SelectiveSupervisorController node) {
+    void kill(SupervisorController node) {
         consumerZookeeperConnections.get(node.consumerId()).close();
     }
 
@@ -280,7 +280,7 @@ class ConsumerTestRuntimeEnvironment {
         }
     }
 
-    void awaitUntilAssignmentExists(SubscriptionName subscription, SelectiveSupervisorController node) {
+    void awaitUntilAssignmentExists(SubscriptionName subscription, SupervisorController node) {
         await().atMost(adjust(ONE_SECOND)).until(() -> {
             node.assignedSubscriptions().contains(subscription);
         });
@@ -325,16 +325,16 @@ class ConsumerTestRuntimeEnvironment {
 
     static class ConsumerControllers {
         ConsumerAssignmentCache assignmentCache;
-        SelectiveSupervisorController supervisorController;
+        SupervisorController supervisorController;
 
         public ConsumerControllers(ConsumerAssignmentCache assignmentNotifyingCache,
-                                   SelectiveSupervisorController supervisorController) {
+                                   SupervisorController supervisorController) {
             this.assignmentCache = assignmentNotifyingCache;
             this.supervisorController = supervisorController;
         }
 
 
-        public SelectiveSupervisorController getSupervisorController() {
+        public SupervisorController getSupervisorController() {
             return supervisorController;
         }
     }

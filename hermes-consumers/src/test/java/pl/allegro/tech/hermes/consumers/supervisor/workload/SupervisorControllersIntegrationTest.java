@@ -10,7 +10,6 @@ import pl.allegro.tech.hermes.consumers.consumer.SerialConsumer;
 import pl.allegro.tech.hermes.consumers.supervisor.ConsumerFactory;
 import pl.allegro.tech.hermes.consumers.supervisor.ConsumersSupervisor;
 import pl.allegro.tech.hermes.consumers.supervisor.monitor.ConsumersRuntimeMonitor;
-import pl.allegro.tech.hermes.consumers.supervisor.workload.selective.SelectiveSupervisorController;
 import pl.allegro.tech.hermes.test.helper.zookeeper.ZookeeperBaseTest;
 
 import java.util.List;
@@ -25,7 +24,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static pl.allegro.tech.hermes.test.helper.endpoint.TimeoutAdjuster.adjust;
 
-public class SelectiveSupervisorControllersIntegrationTest extends ZookeeperBaseTest {
+public class SupervisorControllersIntegrationTest extends ZookeeperBaseTest {
 
     private static ConsumerTestRuntimeEnvironment runtime = new ConsumerTestRuntimeEnvironment(ZookeeperBaseTest::newClient);
 
@@ -39,7 +38,7 @@ public class SelectiveSupervisorControllersIntegrationTest extends ZookeeperBase
     @Test
     public void shouldRegisterConsumerInActiveNodesRegistryOnStartup() throws Exception {
         // when
-        SelectiveSupervisorController controller = runtime.spawnConsumer();
+        SupervisorController controller = runtime.spawnConsumer();
 
         // then
         runtime.waitForRegistration(controller.consumerId());
@@ -50,10 +49,10 @@ public class SelectiveSupervisorControllersIntegrationTest extends ZookeeperBase
     @Test
     public void shouldElectOnlyOneLeaderFromRegisteredConsumers() throws InterruptedException {
         // when
-        List<SelectiveSupervisorController> supervisors = runtime.spawnConsumers(3);
+        List<SupervisorController> supervisors = runtime.spawnConsumers(3);
 
         // then
-        assertThat(supervisors.stream().filter(SelectiveSupervisorController::isLeader).count()).isEqualTo(1);
+        assertThat(supervisors.stream().filter(SupervisorController::isLeader).count()).isEqualTo(1);
 
         shutdown(supervisors);
     }
@@ -61,8 +60,8 @@ public class SelectiveSupervisorControllersIntegrationTest extends ZookeeperBase
     @Test
     public void shouldElectNewLeaderAfterShutdown() {
         // given
-        List<SelectiveSupervisorController> supervisors = runtime.spawnConsumers(3);
-        SelectiveSupervisorController leader = runtime.findLeader(supervisors);
+        List<SupervisorController> supervisors = runtime.spawnConsumers(3);
+        SupervisorController leader = runtime.findLeader(supervisors);
 
         // when
         runtime.kill(leader);
@@ -75,7 +74,7 @@ public class SelectiveSupervisorControllersIntegrationTest extends ZookeeperBase
     @Test
     public void shouldAssignConsumerToSubscription() throws InterruptedException {
         // given
-        SelectiveSupervisorController node = runtime.spawnConsumer();
+        SupervisorController node = runtime.spawnConsumer();
 
         // when
         SubscriptionName subscription = runtime.createSubscription();
@@ -89,7 +88,7 @@ public class SelectiveSupervisorControllersIntegrationTest extends ZookeeperBase
     @Test
     public void shouldAssignSubscriptionToMultipleConsumers() throws InterruptedException {
         // given
-        List<SelectiveSupervisorController> nodes = runtime.spawnConsumers(2);
+        List<SupervisorController> nodes = runtime.spawnConsumers(2);
 
         // when
         SubscriptionName subscription = runtime.createSubscription();
@@ -103,7 +102,7 @@ public class SelectiveSupervisorControllersIntegrationTest extends ZookeeperBase
     @Test
     public void shouldAssignConsumerToMultipleSubscriptions() throws InterruptedException {
         // given
-        SelectiveSupervisorController node = runtime.spawnConsumer();
+        SupervisorController node = runtime.spawnConsumer();
 
         // when
         List<SubscriptionName> subscriptions = runtime.createSubscription(2);
@@ -127,7 +126,7 @@ public class SelectiveSupervisorControllersIntegrationTest extends ZookeeperBase
 
         ConfigFactory config = runtime.consumerConfig("consumer");
         ConsumersSupervisor supervisor = runtime.consumersSupervisor(consumerFactory, config);
-        SelectiveSupervisorController node = runtime.spawnConsumer("consumer", config, supervisor);
+        SupervisorController node = runtime.spawnConsumer("consumer", config, supervisor);
 
         runtime.awaitUntilAssignmentExists(runtime.createSubscription(), node);
 
@@ -145,12 +144,12 @@ public class SelectiveSupervisorControllersIntegrationTest extends ZookeeperBase
 
     }
 
-    private void shutdown(SelectiveSupervisorController controller) throws InterruptedException {
+    private void shutdown(SupervisorController controller) throws InterruptedException {
         controller.shutdown();
     }
 
-    private void shutdown(List<SelectiveSupervisorController> controllers) throws InterruptedException {
-        for (SelectiveSupervisorController s: controllers) {
+    private void shutdown(List<SupervisorController> controllers) throws InterruptedException {
+        for (SupervisorController s: controllers) {
             s.shutdown();
         }
     }

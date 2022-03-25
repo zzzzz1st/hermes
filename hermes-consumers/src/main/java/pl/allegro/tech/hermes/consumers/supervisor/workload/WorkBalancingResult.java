@@ -1,14 +1,12 @@
-package pl.allegro.tech.hermes.consumers.supervisor.workload.selective;
-
-import pl.allegro.tech.hermes.consumers.supervisor.workload.SubscriptionAssignmentView;
+package pl.allegro.tech.hermes.consumers.supervisor.workload;
 
 import static java.lang.String.format;
 
 public class WorkBalancingResult {
-    private SubscriptionAssignmentView state;
-    private Counts subscriptionsCounts;
-    private Counts consumersCounts;
-    private int missingResources;
+    private final SubscriptionAssignmentView state;
+    private final Counts subscriptionsCounts;
+    private final Counts consumersCounts;
+    private final int missingResources;
 
     private WorkBalancingResult(Builder builder) {
         this.state = builder.state;

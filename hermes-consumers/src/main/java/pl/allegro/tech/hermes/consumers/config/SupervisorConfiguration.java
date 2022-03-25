@@ -44,7 +44,8 @@ import pl.allegro.tech.hermes.consumers.supervisor.workload.HierarchicalConsumer
 import pl.allegro.tech.hermes.consumers.supervisor.workload.HierarchicalConsumerAssignmentRegistry;
 import pl.allegro.tech.hermes.consumers.supervisor.workload.SubscriptionAssignmentPathSerializer;
 import pl.allegro.tech.hermes.consumers.supervisor.workload.SupervisorController;
-import pl.allegro.tech.hermes.consumers.supervisor.workload.selective.SelectiveSupervisorController;
+import pl.allegro.tech.hermes.consumers.supervisor.workload.WorkBalancer;
+import pl.allegro.tech.hermes.consumers.supervisor.workload.selective.SelectiveWorkBalancer;
 import pl.allegro.tech.hermes.domain.notifications.InternalNotificationsBus;
 import pl.allegro.tech.hermes.domain.subscription.SubscriptionRepository;
 import pl.allegro.tech.hermes.domain.topic.TopicRepository;
@@ -77,12 +78,13 @@ public class SupervisorConfiguration {
                                                      ZookeeperAdminCache adminCache,
                                                      HermesMetrics metrics,
                                                      ConfigFactory configs,
-                                                     WorkloadConstraintsRepository workloadConstraintsRepository) {
+                                                     WorkloadConstraintsRepository workloadConstraintsRepository,
+                                                     WorkBalancer workBalancer) {
         ThreadFactory threadFactory = new ThreadFactoryBuilder()
                 .setNameFormat("AssignmentExecutor-%d")
                 .setUncaughtExceptionHandler((t, e) -> logger.error("AssignmentExecutor failed {}", t.getName(), e)).build();
         ExecutorService assignmentExecutor = newFixedThreadPool(configs.getIntProperty(CONSUMER_WORKLOAD_ASSIGNMENT_PROCESSING_THREAD_POOL_SIZE), threadFactory);
-        return new SelectiveSupervisorController(
+        return new SupervisorController(
                 supervisor,
                 notificationsBus,
                 subscriptionsCache,
@@ -94,8 +96,14 @@ public class SupervisorConfiguration {
                 assignmentExecutor,
                 configs,
                 metrics,
-                workloadConstraintsRepository
+                workloadConstraintsRepository,
+                workBalancer
         );
+    }
+
+    @Bean
+    public WorkBalancer workBalancer() {
+        return new SelectiveWorkBalancer();
     }
 
     @Bean
@@ -228,7 +236,7 @@ public class SupervisorConfiguration {
             throw e;
         }
 
-        String clusterName = configFactory.getStringProperty(Configs.KAFKA_CLUSTER_NAME);
+        String clusterName = configFactory.getStringProperty(KAFKA_CLUSTER_NAME);
 
         switch (type) {
             case HIERARCHICAL:
