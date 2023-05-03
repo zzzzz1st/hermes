@@ -1,7 +1,6 @@
 package pl.allegro.tech.hermes.management.domain.subscription.validator;
 
 import com.google.common.base.Objects;
-import org.springframework.stereotype.Component;
 import pl.allegro.tech.hermes.api.ContentType;
 import pl.allegro.tech.hermes.api.Subscription;
 import pl.allegro.tech.hermes.api.Topic;
@@ -10,8 +9,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-@Component
-public class MessageFilterTypeValidator {
+class MessageFilterTypeValidator {
 
     private static final String ERROR_MESSAGE = "Message filter type %s doesn't match topic content type %s";
 
@@ -22,22 +20,22 @@ public class MessageFilterTypeValidator {
             new ContentTypeFilterTypePair(ContentType.AVRO, "header")
     ));
 
-    public void check(Subscription subscription, Topic topic) {
+    void check(Subscription subscription, Topic topic) {
         subscription.getFilters()
                 .stream()
                 .map(filter -> new ContentTypeFilterTypePair(topic.getContentType(), filter.getType()))
-                .forEach(pair -> checkTypeMaching(pair));
+                .forEach(this::checkTypeMaching);
     }
 
     private void checkTypeMaching(ContentTypeFilterTypePair pair) {
-        if (!VALID_TYPES_COMBINATIONS.contains(pair)){
+        if (!VALID_TYPES_COMBINATIONS.contains(pair)) {
             throw new SubscriptionValidationException(String.format(ERROR_MESSAGE, pair.filterType, pair.contentType));
         }
     }
 
     static class ContentTypeFilterTypePair {
-        private ContentType contentType;
-        private String filterType;
+        private final ContentType contentType;
+        private final String filterType;
 
         ContentTypeFilterTypePair(ContentType contentType, String filterType) {
             this.contentType = contentType;
@@ -46,11 +44,15 @@ public class MessageFilterTypeValidator {
 
         @Override
         public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
             ContentTypeFilterTypePair validPair = (ContentTypeFilterTypePair) o;
-            return contentType == validPair.contentType &&
-                    Objects.equal(filterType, validPair.filterType);
+            return contentType == validPair.contentType
+                    && Objects.equal(filterType, validPair.filterType);
         }
 
         @Override

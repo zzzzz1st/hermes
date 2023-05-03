@@ -4,14 +4,6 @@ import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Multimaps;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-
-import java.util.Collection;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
-import javax.annotation.PreDestroy;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,9 +13,12 @@ import pl.allegro.tech.hermes.api.Subscription;
 import pl.allegro.tech.hermes.api.SubscriptionName;
 import pl.allegro.tech.hermes.api.TopicName;
 import pl.allegro.tech.hermes.domain.subscription.SubscriptionRepository;
-import pl.allegro.tech.hermes.management.domain.topic.TopicService;
 
-import static java.util.stream.Collectors.toList;
+import java.util.Collection;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import javax.annotation.PreDestroy;
 
 @Component
 public class SubscriptionOwnerCache {
@@ -31,15 +26,13 @@ public class SubscriptionOwnerCache {
     private static final Logger logger = LoggerFactory.getLogger(SubscriptionOwnerCache.class);
 
     private final SubscriptionRepository subscriptionRepository;
-    private final TopicService topicService;
     private final ScheduledExecutorService scheduledExecutorService;
 
     private Multimap<OwnerId, SubscriptionName> cache = Multimaps.synchronizedMultimap(ArrayListMultimap.create());
 
-    public SubscriptionOwnerCache(SubscriptionRepository subscriptionRepository, TopicService topicService,
+    public SubscriptionOwnerCache(SubscriptionRepository subscriptionRepository,
                                   @Value("${subscriptionOwnerCache.refreshRateInSeconds}") int refreshRateInSeconds) {
         this.subscriptionRepository = subscriptionRepository;
-        this.topicService = topicService;
         scheduledExecutorService = Executors.newSingleThreadScheduledExecutor(
                 new ThreadFactoryBuilder()
                         .setNameFormat("subscription-owner-cache-%d")
@@ -78,8 +71,7 @@ public class SubscriptionOwnerCache {
             logger.info("Starting filling SubscriptionOwnerCache");
             long start = System.currentTimeMillis();
             Multimap<OwnerId, SubscriptionName> cache = ArrayListMultimap.create();
-            topicService.getAllTopics().stream()
-                    .flatMap(topic -> subscriptionRepository.listSubscriptions(topic.getName()).stream())
+            subscriptionRepository.listAllSubscriptions()
                     .forEach(subscription -> cache.put(subscription.getOwner(), subscription.getQualifiedName()));
             this.cache = Multimaps.synchronizedMultimap(cache);
             long end = System.currentTimeMillis();

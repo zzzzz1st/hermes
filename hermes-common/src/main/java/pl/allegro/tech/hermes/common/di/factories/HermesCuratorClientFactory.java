@@ -1,42 +1,32 @@
 package pl.allegro.tech.hermes.common.di.factories;
 
 import org.apache.curator.framework.CuratorFramework;
-import org.glassfish.hk2.api.Factory;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
-import pl.allegro.tech.hermes.common.config.Configs;
 
-import javax.inject.Inject;
 import java.util.Optional;
 
-public class HermesCuratorClientFactory implements Factory<CuratorFramework> {
+public class HermesCuratorClientFactory {
 
-    private final ConfigFactory configFactory;
+    private final ZookeeperParameters zookeeperParameters;
     private final CuratorClientFactory curatorClientFactory;
 
-    @Inject
-    public HermesCuratorClientFactory(ConfigFactory configFactory, CuratorClientFactory curatorClientFactory) {
-        this.configFactory = configFactory;
+    public HermesCuratorClientFactory(ZookeeperParameters zookeeperParameters, CuratorClientFactory curatorClientFactory) {
+        this.zookeeperParameters = zookeeperParameters;
         this.curatorClientFactory = curatorClientFactory;
     }
 
-    @Override
     public CuratorFramework provide() {
-        String connectString = configFactory.getStringProperty(Configs.ZOOKEEPER_CONNECT_STRING);
+        String connectString = zookeeperParameters.getConnectionString();
+
         Optional<CuratorClientFactory.ZookeeperAuthorization> authorization = Optional.empty();
 
-        if (configFactory.getBooleanProperty(Configs.ZOOKEEPER_AUTHORIZATION_ENABLED)) {
+        if (zookeeperParameters.isAuthorizationEnabled()) {
             authorization = Optional.of(new CuratorClientFactory.ZookeeperAuthorization(
-                    configFactory.getStringProperty(Configs.ZOOKEEPER_AUTHORIZATION_SCHEME),
-                    configFactory.getStringProperty(Configs.ZOOKEEPER_AUTHORIZATION_USER),
-                    configFactory.getStringProperty(Configs.ZOOKEEPER_AUTHORIZATION_PASSWORD))
+                    zookeeperParameters.getScheme(),
+                    zookeeperParameters.getUser(),
+                    zookeeperParameters.getPassword())
             );
         }
 
         return curatorClientFactory.provide(connectString, authorization);
-    }
-
-    @Override
-    public void dispose(CuratorFramework instance) {
-        instance.close();
     }
 }

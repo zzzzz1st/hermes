@@ -4,9 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.ImmutableMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
 
-import javax.inject.Inject;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Map;
@@ -16,8 +14,6 @@ import static com.google.common.base.Charsets.UTF_8;
 import static com.google.common.primitives.Bytes.indexOf;
 import static java.lang.String.format;
 import static java.util.Arrays.copyOfRange;
-import static pl.allegro.tech.hermes.common.config.Configs.MESSAGE_CONTENT_ROOT;
-import static pl.allegro.tech.hermes.common.config.Configs.METADATA_CONTENT_ROOT;
 
 public class JsonMessageContentWrapper {
     private static final Logger LOGGER = LoggerFactory.getLogger(JsonMessageContentWrapper.class);
@@ -30,11 +26,6 @@ public class JsonMessageContentWrapper {
     private final ObjectMapper mapper;
     private final byte[] contentRootField;
     private final byte[] metadataRootField;
-
-    @Inject
-    public JsonMessageContentWrapper(ConfigFactory config, ObjectMapper mapper) {
-        this(config.getStringProperty(MESSAGE_CONTENT_ROOT), config.getStringProperty(METADATA_CONTENT_ROOT), mapper);
-    }
 
     public JsonMessageContentWrapper(String contentRootName, String metadataRootName, ObjectMapper mapper) {
         this.contentRootField = formatNodeKey(contentRootName);
@@ -69,9 +60,13 @@ public class JsonMessageContentWrapper {
             return unwrapMessageContent(json);
         } else {
             UUID id = UUID.randomUUID();
-            LOGGER.warn("Unwrapped message read by consumer (size={}, id={}).", json.length, id.toString());
+            LOGGER.warn("Unwrapped message read by consumer (size={}, id={}).", json.length, id);
             return new UnwrappedMessageContent(new MessageMetadata(1L, id.toString(), ImmutableMap.of()), json);
         }
+    }
+
+    private byte[] unwrapContent(byte[] json, int rootIndex) {
+        return copyOfRange(json, rootIndex + contentRootField.length, json.length - BRACKET_LENGTH);
     }
 
     private UnwrappedMessageContent unwrapMessageContent(byte[] json) {
@@ -82,10 +77,6 @@ public class JsonMessageContentWrapper {
         } catch (Exception exception) {
             throw new UnwrappingException("Could not unwrap json message", exception);
         }
-    }
-
-    private byte[] unwrapContent(byte[] json, int rootIndex) {
-        return copyOfRange(json, rootIndex + contentRootField.length, json.length - BRACKET_LENGTH);
     }
 
     private MessageMetadata unwrapMesssageMetadata(byte[] json, int metadataIndexStart, int metadataIndexEnd) throws IOException {

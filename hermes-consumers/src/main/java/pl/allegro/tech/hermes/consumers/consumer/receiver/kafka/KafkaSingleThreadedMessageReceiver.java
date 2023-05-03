@@ -16,16 +16,16 @@ import pl.allegro.tech.hermes.common.kafka.KafkaNamesMapper;
 import pl.allegro.tech.hermes.common.kafka.KafkaTopic;
 import pl.allegro.tech.hermes.common.kafka.KafkaTopics;
 import pl.allegro.tech.hermes.common.kafka.offset.PartitionOffset;
-import pl.allegro.tech.hermes.common.message.wrapper.UnwrappedMessageContent;
 import pl.allegro.tech.hermes.common.metric.HermesMetrics;
 import pl.allegro.tech.hermes.consumers.consumer.Message;
+import pl.allegro.tech.hermes.consumers.consumer.load.SubscriptionLoadRecorder;
 import pl.allegro.tech.hermes.consumers.consumer.offset.ConsumerPartitionAssignmentState;
 import pl.allegro.tech.hermes.consumers.consumer.offset.OffsetCommitterConsumerRebalanceListener;
 import pl.allegro.tech.hermes.consumers.consumer.offset.SubscriptionPartitionOffset;
 import pl.allegro.tech.hermes.consumers.consumer.offset.kafka.broker.KafkaConsumerOffsetMover;
 import pl.allegro.tech.hermes.consumers.consumer.receiver.MessageReceiver;
+import pl.allegro.tech.hermes.consumers.consumer.receiver.RetryableReceiverError;
 
-import java.time.Clock;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -40,44 +40,40 @@ import java.util.stream.Collectors;
 public class KafkaSingleThreadedMessageReceiver implements MessageReceiver {
     private static final Logger logger = LoggerFactory.getLogger(KafkaSingleThreadedMessageReceiver.class);
 
-    private KafkaConsumer<byte[], byte[]> consumer;
-    private final MessageContentReader messageContentReader;
-    private final Clock clock;
+    private final KafkaConsumer<byte[], byte[]> consumer;
+    private final KafkaConsumerRecordToMessageConverter messageConverter;
 
-    private final BlockingQueue<Message> readQueue;
+    private final BlockingQueue<ConsumerRecord<byte[], byte[]>> readQueue;
     private final KafkaConsumerOffsetMover offsetMover;
 
     private final HermesMetrics metrics;
-    private Topic topic;
+    private final SubscriptionLoadRecorder loadReporter;
     private volatile Subscription subscription;
 
-    private Map<String, KafkaTopic> topics;
-
-    private final int pollTimeout;
+    private final Duration poolTimeout;
     private final ConsumerPartitionAssignmentState partitionAssignmentState;
 
     public KafkaSingleThreadedMessageReceiver(KafkaConsumer<byte[], byte[]> consumer,
-                                              MessageContentReader messageContentReader,
+                                              KafkaConsumerRecordToMessageConverterFactory messageConverterFactory,
                                               HermesMetrics metrics,
                                               KafkaNamesMapper kafkaNamesMapper,
                                               Topic topic,
                                               Subscription subscription,
-                                              Clock clock,
-                                              int pollTimeout,
+                                              Duration poolTimeout,
                                               int readQueueCapacity,
+                                              SubscriptionLoadRecorder loadReporter,
                                               ConsumerPartitionAssignmentState partitionAssignmentState) {
         this.metrics = metrics;
-        this.topic = topic;
         this.subscription = subscription;
-        this.pollTimeout = pollTimeout;
+        this.poolTimeout = poolTimeout;
+        this.loadReporter = loadReporter;
         this.partitionAssignmentState = partitionAssignmentState;
-        this.topics = getKafkaTopics(topic, kafkaNamesMapper).stream()
-                .collect(Collectors.toMap(t -> t.name().asString(), Function.identity()));
         this.consumer = consumer;
-        this.messageContentReader = messageContentReader;
-        this.clock = clock;
         this.readQueue = new ArrayBlockingQueue<>(readQueueCapacity);
         this.offsetMover = new KafkaConsumerOffsetMover(subscription.getQualifiedName(), consumer);
+        Map<String, KafkaTopic> topics = getKafkaTopics(topic, kafkaNamesMapper).stream()
+                .collect(Collectors.toMap(t -> t.name().asString(), Function.identity()));
+        this.messageConverter = messageConverterFactory.create(topic, subscription, topics);
         this.consumer.subscribe(topics.keySet(),
                 new OffsetCommitterConsumerRebalanceListener(subscription.getQualifiedName(), partitionAssignmentState));
     }
@@ -92,22 +88,9 @@ public class KafkaSingleThreadedMessageReceiver implements MessageReceiver {
     @Override
     public Optional<Message> next() {
         try {
-            if (readQueue.isEmpty()) {
-                ConsumerRecords<byte[], byte[]> records = consumer.poll(Duration.ofMillis(pollTimeout));
-                try {
-                    for (ConsumerRecord<byte[], byte[]> record : records) {
-                        readQueue.add(convertToMessage(record));
-                    }
-                } catch (Exception ex) {
-                    logger.error("Failed to read message for subscription {}, readQueueSize {}, records {}",
-                            subscription.getQualifiedName(),
-                            readQueue.size(),
-                            records.count(),
-                            ex);
-                }
-            }
-            return Optional.ofNullable(readQueue.poll());
-        } catch (InterruptException ex ) {
+            supplyReadQueue();
+            return getMessageFromReadQueue();
+        } catch (InterruptException ex) {
             // Despite that Thread.currentThread().interrupt() is called in InterruptException's constructor
             // Thread.currentThread().isInterrupted() somehow returns false so we reset it.
             logger.info("Kafka consumer thread interrupted", ex);
@@ -125,25 +108,42 @@ public class KafkaSingleThreadedMessageReceiver implements MessageReceiver {
         }
     }
 
+    private void supplyReadQueue() {
+        if (readQueue.isEmpty()) {
+            ConsumerRecords<byte[], byte[]> records = consumer.poll(poolTimeout);
+            try {
+                for (ConsumerRecord<byte[], byte[]> record : records) {
+                    loadReporter.recordSingleOperation();
+                    readQueue.add(record);
+                }
+            } catch (Exception ex) {
+                logger.error("Failed to read message for subscription {}, readQueueSize {}, records {}",
+                        subscription.getQualifiedName(),
+                        readQueue.size(),
+                        records.count(),
+                        ex);
+            }
+        }
+    }
+
+    private Optional<Message> getMessageFromReadQueue() {
+        if (!readQueue.isEmpty()) {
+            ConsumerRecord<byte[], byte[]> record = readQueue.element();
+            try {
+                Message message = convertToMessage(record);
+                readQueue.poll();
+                return Optional.of(message);
+            } catch (RetryableReceiverError ex) {
+                logger.warn("Cannot convert record to message... Operation will be delayed", ex);
+                return Optional.empty();
+            }
+        }
+        return Optional.empty();
+    }
+
     private Message convertToMessage(ConsumerRecord<byte[], byte[]> record) {
-        KafkaTopic kafkaTopic = topics.get(record.topic());
-        UnwrappedMessageContent unwrappedContent = messageContentReader.read(record, kafkaTopic.contentType());
         long currentTerm = partitionAssignmentState.currentTerm(subscription.getQualifiedName());
-        return new Message(
-                unwrappedContent.getMessageMetadata().getId(),
-                topic.getQualifiedName(),
-                unwrappedContent.getContent(),
-                kafkaTopic.contentType(),
-                unwrappedContent.getSchema(),
-                unwrappedContent.getMessageMetadata().getTimestamp(),
-                clock.millis(),
-                new PartitionOffset(kafkaTopic.name(), record.offset(), record.partition()),
-                currentTerm,
-                unwrappedContent.getMessageMetadata().getExternalMetadata(),
-                subscription.getHeaders(),
-                subscription.getName(),
-                subscription.isSubscriptionIdentityHeadersEnabled()
-        );
+        return messageConverter.convertToMessage(record, currentTerm);
     }
 
     @Override
@@ -152,6 +152,10 @@ public class KafkaSingleThreadedMessageReceiver implements MessageReceiver {
             consumer.close();
         } catch (IllegalStateException ex) {
             // means it was already closed
+        } catch (InterruptException ex) {
+            // means that the thread was interrupted
+        } catch (KafkaException ex) {
+            logger.warn("KafkaException occurred during closing consumer.", ex);
         } finally {
             partitionAssignmentState.revokeAll(subscription.getQualifiedName());
         }
@@ -160,13 +164,14 @@ public class KafkaSingleThreadedMessageReceiver implements MessageReceiver {
     @Override
     public void update(Subscription newSubscription) {
         this.subscription = newSubscription;
+        messageConverter.update(subscription);
     }
 
     @Override
     public void commit(Set<SubscriptionPartitionOffset> offsets) {
         try {
             consumer.commitSync(createOffset(offsets));
-        } catch (InterruptException ex ) {
+        } catch (InterruptException ex) {
             logger.info("Kafka consumer thread interrupted", ex);
             Thread.currentThread().interrupt();
         } catch (Exception ex) {
@@ -189,7 +194,9 @@ public class KafkaSingleThreadedMessageReceiver implements MessageReceiver {
                     metrics.counter("offset-committer.skipped").inc();
                 }
             } else {
-                logger.warn("Consumer is not assigned to partition {} of subscription {} at current term {}, ignoring offset {} from term {} to commit",
+                logger.warn(
+                        "Consumer is not assigned to partition {} of subscription {} at current term {},"
+                                + " ignoring offset {} from term {} to commit",
                         partitionOffset.getPartition(), partitionOffset.getSubscriptionName(),
                         partitionAssignmentState.currentTerm(partitionOffset.getSubscriptionName()),
                         partitionOffset.getOffset(), partitionOffset.getPartitionAssignmentTerm());

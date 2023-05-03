@@ -1,18 +1,19 @@
 package pl.allegro.tech.hermes.management.infrastructure.retransmit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.util.Collections;
-import java.util.List;
-import java.util.stream.Collectors;
 import org.apache.curator.framework.CuratorFramework;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import pl.allegro.tech.hermes.api.OfflineRetransmissionTask;
 import pl.allegro.tech.hermes.common.exception.InternalProcessingException;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperBasedRepository;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperPaths;
-import pl.allegro.tech.hermes.api.OfflineRetransmissionTask;
-import pl.allegro.tech.hermes.management.domain.retransmit.OfflineRetransmissionValidationException;
 import pl.allegro.tech.hermes.management.domain.retransmit.OfflineRetransmissionRepository;
+import pl.allegro.tech.hermes.management.domain.retransmit.OfflineRetransmissionValidationException;
+
+import java.util.Collections;
+import java.util.List;
+import java.util.stream.Collectors;
 
 import static java.lang.String.format;
 
@@ -28,8 +29,7 @@ public class ZookeeperOfflineRetransmissionRepository extends ZookeeperBasedRepo
     public void saveTask(OfflineRetransmissionTask task) {
         logger.info("Saving retransmission task {}", task);
         try {
-            zookeeper.create().creatingParentsIfNeeded()
-                    .forPath(paths.offlineRetransmissionPath(task.getTaskId()), mapper.writeValueAsBytes(task));
+            createRecursively(paths.offlineRetransmissionPath(task.getTaskId()), task);
             logger.info("Successfully saved retransmission task {}", task);
         } catch (Exception ex) {
             String msg = format("Error while saving retransmission task %s", task.toString());
@@ -41,10 +41,10 @@ public class ZookeeperOfflineRetransmissionRepository extends ZookeeperBasedRepo
     public List<OfflineRetransmissionTask> getAllTasks() {
         try {
             if (pathExists(paths.offlineRetransmissionPath())) {
-                return zookeeper.getChildren()
-                        .forPath(paths.offlineRetransmissionPath())
+                return childrenOf(paths.offlineRetransmissionPath())
                         .stream()
-                        .map(id -> readFrom(paths.offlineRetransmissionPath(id), OfflineRetransmissionTask.class)).collect(Collectors.toList());
+                        .map(id -> readFrom(paths.offlineRetransmissionPath(id), OfflineRetransmissionTask.class))
+                        .collect(Collectors.toList());
             }
             return Collections.emptyList();
         } catch (Exception ex) {
@@ -58,7 +58,7 @@ public class ZookeeperOfflineRetransmissionRepository extends ZookeeperBasedRepo
         logger.info("Trying to delete retransmission task with id={}", taskId);
         try {
             ensureTaskExists(taskId);
-            zookeeper.delete().forPath(paths.offlineRetransmissionPath(taskId));
+            remove(paths.offlineRetransmissionPath(taskId));
             logger.info("Successfully deleted retransmission task with id={}", taskId);
         } catch (OfflineRetransmissionValidationException ex) {
             throw ex;

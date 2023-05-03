@@ -1,11 +1,11 @@
 package pl.allegro.tech.hermes.integration.setup;
 
 import com.google.common.collect.ImmutableMap;
-import com.netflix.config.DynamicPropertyFactory;
+import com.jayway.awaitility.core.ConditionTimeoutException;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
+import org.slf4j.Logger;
 import pl.allegro.tech.hermes.integration.helper.Waiter;
 import pl.allegro.tech.hermes.management.HermesManagement;
 import pl.allegro.tech.hermes.test.helper.endpoint.BrokerOperations;
@@ -19,9 +19,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static com.jayway.awaitility.Awaitility.waitAtMost;
+import static org.slf4j.LoggerFactory.getLogger;
 import static pl.allegro.tech.hermes.test.helper.endpoint.TimeoutAdjuster.adjust;
 
 public class HermesManagementInstance {
+
+    private static final Logger logger = getLogger(HermesManagementInstance.class);
+
     private final HermesAPIOperations operations;
 
     private HermesManagementInstance(HermesAPIOperations operations) {
@@ -78,34 +82,25 @@ public class HermesManagementInstance {
             return this;
         }
 
-        public Starter avroContentTypeMetadataRequired(boolean avroContentTypeMetadataRequired) {
-            this.avroContentTypeMetadataRequired = avroContentTypeMetadataRequired;
-            return this;
-        }
-
-
         public HermesManagementInstance start() {
             try {
                 startManagement();
-                CuratorFramework zookeeper = startZookeeperClient();
-                waitUntilStructureInZookeeperIsCreated(zookeeper);
-                HermesAPIOperations operations = setupOperations(zookeeper);
+                HermesAPIOperations operations = setupOperations(startZookeeperClient());
+                waitUntilManagementIsInReadWriteMode(operations);
                 return new HermesManagementInstance(operations);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
         }
 
-        private void waitUntilStructureInZookeeperIsCreated(CuratorFramework zookeeper) {
-            waitAtMost(adjust(120), TimeUnit.SECONDS).until(() -> zookeeper.checkExists().forPath("/hermes/groups") != null);
+        private void waitUntilManagementIsInReadWriteMode(HermesAPIOperations operations) {
+            waitAtMost(adjust(240), TimeUnit.SECONDS).until(operations::isInReadWriteMode);
         }
 
         private void startManagement() {
             List<String> args = new ArrayList<>();
-            args.add("-p");
-            args.add("" + port);
-            args.add("-e");
-            args.add("integration");
+            args.add("--server.port=" + port);
+            args.add("--spring.profiles.active=integration");
             int kafkaClusterIndex = 0;
             for (ClusterInfo kafkaCluster : kafkaClusters) {
                 args.add("--kafka.clusters[" + kafkaClusterIndex + "].datacenter=" + kafkaCluster.getDc());
@@ -129,8 +124,7 @@ public class HermesManagementInstance {
         }
 
         private HermesAPIOperations setupOperations(CuratorFramework zookeeper) {
-            ConfigFactory configFactory = new ConfigFactory(DynamicPropertyFactory.getInstance());
-            BrokerOperations brokerOperations = new BrokerOperations(ImmutableMap.of(), configFactory);
+            BrokerOperations brokerOperations = new BrokerOperations(ImmutableMap.of());
             String managementUrl = "http://localhost:" + port + "/";
             HermesEndpoints management = new HermesEndpoints(managementUrl, managementUrl);
             Waiter wait = new Waiter(management, zookeeper, brokerOperations, null, KAFKA_NAMESPACE);
@@ -138,16 +132,26 @@ public class HermesManagementInstance {
         }
 
         private CuratorFramework startZookeeperClient() {
-            final CuratorFramework zookeeperClient = CuratorFrameworkFactory.builder()
-                    .connectString(
-                            zkClusters.stream()
-                                    .map(ClusterInfo::getConnectionString)
-                                    .collect(Collectors.joining(","))
-                    )
-                    .retryPolicy(new ExponentialBackoffRetry(1000, 3))
-                    .build();
+            final CuratorFramework zookeeperClient = buildCuratorFramework(zkClusters.get(0).getConnectionString());
             zookeeperClient.start();
             return zookeeperClient;
+        }
+
+        private List<CuratorFramework> startSeparateZookeeperClientPerCluster() {
+            final List<CuratorFramework> zookeeperClients =
+                    zkClusters.stream()
+                            .map(ClusterInfo::getConnectionString)
+                            .map(this::buildCuratorFramework)
+                            .collect(Collectors.toList());
+            zookeeperClients.forEach(CuratorFramework::start);
+            return zookeeperClients;
+        }
+
+        private CuratorFramework buildCuratorFramework(String connectString) {
+            return CuratorFrameworkFactory.builder()
+                    .connectString(connectString)
+                    .retryPolicy(new ExponentialBackoffRetry(1000, 3))
+                    .build();
         }
     }
 

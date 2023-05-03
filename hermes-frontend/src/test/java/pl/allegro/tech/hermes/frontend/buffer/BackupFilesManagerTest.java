@@ -18,12 +18,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 public class BackupFilesManagerTest {
 
-    private Clock clock = Clock.fixed(Instant.ofEpochMilli(12345), ZoneId.systemDefault());
+    private final Clock clock = Clock.fixed(Instant.ofEpochMilli(12345), ZoneId.systemDefault());
 
     private File tempDir;
 
     @Before
-    public void setup() throws IOException {
+    public void setup() {
         tempDir = Files.createTempDir();
     }
 
@@ -48,7 +48,7 @@ public class BackupFilesManagerTest {
     @Test
     public void shouldReadBackupFilesList() throws IOException {
         // given
-        BackupFilesManager backupFilesManager = new BackupFilesManager(tempDir.getAbsolutePath(), clock);
+        final BackupFilesManager backupFilesManager = new BackupFilesManager(tempDir.getAbsolutePath(), clock);
         File timestampedBackup1 = new File(tempDir, "hermes-buffer-v3-001.dat");
         File timestampedBackup2 = new File(tempDir, "hermes-buffer-v3-002.dat");
         File customBackup = new File(tempDir, "hermes-buffer-v3-old.dat");
@@ -103,7 +103,7 @@ public class BackupFilesManagerTest {
     @Test
     public void shouldLoadAllTemporaryBackupV2Files() throws IOException {
         // given
-        BackupFilesManager backupFilesManager = new BackupFilesManager(tempDir.getAbsolutePath(), clock);
+        final BackupFilesManager backupFilesManager = new BackupFilesManager(tempDir.getAbsolutePath(), clock);
         File temporaryBackup1 = new File(tempDir, "hermes-buffer-v2-old.tmp");
         File temporaryBackup2 = new File(tempDir, "hermes-buffer-002-v2-old.tmp");
         File customBackup = new File(tempDir, "hermes-buffer.dat");

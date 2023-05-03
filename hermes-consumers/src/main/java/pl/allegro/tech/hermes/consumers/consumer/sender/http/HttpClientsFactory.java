@@ -4,59 +4,46 @@ import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.http2.client.HTTP2Client;
 import org.eclipse.jetty.http2.client.http.HttpClientTransportOverHTTP2;
 import org.eclipse.jetty.util.HttpCookieStore;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
 import pl.allegro.tech.hermes.common.metric.executor.InstrumentedExecutorServiceFactory;
 
 import java.util.concurrent.ExecutorService;
 
-import static pl.allegro.tech.hermes.common.config.Configs.CONSUMER_HTTP2_CLIENT_IDLE_TIMEOUT;
-import static pl.allegro.tech.hermes.common.config.Configs.CONSUMER_HTTP2_CLIENT_MAX_REQUESTS_QUEUED_PER_DESTINATION;
-import static pl.allegro.tech.hermes.common.config.Configs.CONSUMER_HTTP2_CLIENT_THREAD_POOL_MONITORING;
-import static pl.allegro.tech.hermes.common.config.Configs.CONSUMER_HTTP2_CLIENT_THREAD_POOL_SIZE;
-import static pl.allegro.tech.hermes.common.config.Configs.CONSUMER_HTTP_CLIENT_FOLLOW_REDIRECTS;
-import static pl.allegro.tech.hermes.common.config.Configs.CONSUMER_HTTP_CLIENT_IDLE_TIMEOUT;
-import static pl.allegro.tech.hermes.common.config.Configs.CONSUMER_HTTP_CLIENT_MAX_CONNECTIONS_PER_DESTINATION;
-import static pl.allegro.tech.hermes.common.config.Configs.CONSUMER_HTTP_CLIENT_MAX_REQUESTS_QUEUED_PER_DESTINATION;
-import static pl.allegro.tech.hermes.common.config.Configs.CONSUMER_HTTP_CLIENT_THREAD_POOL_MONITORING;
-import static pl.allegro.tech.hermes.common.config.Configs.CONSUMER_HTTP_CLIENT_THREAD_POOL_SIZE;
-
 public class HttpClientsFactory {
 
-    private final ConfigFactory configFactory;
     private final InstrumentedExecutorServiceFactory executorFactory;
     private final SslContextFactoryProvider sslContextFactoryProvider;
 
-    public HttpClientsFactory(ConfigFactory configFactory,
-                              InstrumentedExecutorServiceFactory executorFactory,
-                              SslContextFactoryProvider sslContextFactoryProvider) {
-        this.configFactory = configFactory;
+    public HttpClientsFactory(
+            InstrumentedExecutorServiceFactory executorFactory,
+            SslContextFactoryProvider sslContextFactoryProvider) {
         this.executorFactory = executorFactory;
         this.sslContextFactoryProvider = sslContextFactoryProvider;
     }
 
-    public HttpClient createClientForHttp1(String name) {
+    public HttpClient createClientForHttp1(String name, Http1ClientParameters http1ClientParameters) {
         ExecutorService executor = executorFactory.getExecutorService(
                 name,
-                configFactory.getIntProperty(CONSUMER_HTTP_CLIENT_THREAD_POOL_SIZE),
-                configFactory.getBooleanProperty(CONSUMER_HTTP_CLIENT_THREAD_POOL_MONITORING));
+                http1ClientParameters.getThreadPoolSize(),
+                http1ClientParameters.isThreadPoolMonitoringEnabled());
 
         HttpClient client = sslContextFactoryProvider.provideSslContextFactory()
-                .map(sslContextFactory -> new HttpClient(sslContextFactory))
-                .orElseGet(() -> new HttpClient());
-        client.setMaxConnectionsPerDestination(configFactory.getIntProperty(CONSUMER_HTTP_CLIENT_MAX_CONNECTIONS_PER_DESTINATION));
-        client.setMaxRequestsQueuedPerDestination(configFactory.getIntProperty(CONSUMER_HTTP_CLIENT_MAX_REQUESTS_QUEUED_PER_DESTINATION));
+                .map(HttpClient::new)
+                .orElseGet(HttpClient::new);
+        client.setMaxConnectionsPerDestination(http1ClientParameters.getMaxConnectionsPerDestination());
+        client.setMaxRequestsQueuedPerDestination(http1ClientParameters.getMaxRequestsQueuedPerDestination());
         client.setExecutor(executor);
         client.setCookieStore(new HttpCookieStore.Empty());
-        client.setIdleTimeout(configFactory.getIntProperty(CONSUMER_HTTP_CLIENT_IDLE_TIMEOUT));
-        client.setFollowRedirects(configFactory.getBooleanProperty(CONSUMER_HTTP_CLIENT_FOLLOW_REDIRECTS));
+        client.setIdleTimeout(http1ClientParameters.getIdleTimeout().toMillis());
+        client.setFollowRedirects(http1ClientParameters.isFollowRedirectsEnabled());
+        client.setConnectTimeout(http1ClientParameters.getConnectionTimeout().toMillis());
         return client;
     }
 
-    public HttpClient createClientForHttp2() {
+    public HttpClient createClientForHttp2(String name, Http2ClientParameters http2ClientParameters) {
         ExecutorService executor = executorFactory.getExecutorService(
-                "jetty-http2-client",
-                configFactory.getIntProperty(CONSUMER_HTTP2_CLIENT_THREAD_POOL_SIZE),
-                configFactory.getBooleanProperty(CONSUMER_HTTP2_CLIENT_THREAD_POOL_MONITORING));
+                name,
+                http2ClientParameters.getThreadPoolSize(),
+                http2ClientParameters.isThreadPoolMonitoringEnabled());
 
         HTTP2Client http2Client = new HTTP2Client();
         http2Client.setExecutor(executor);
@@ -65,10 +52,11 @@ public class HttpClientsFactory {
         HttpClient client = sslContextFactoryProvider.provideSslContextFactory()
                 .map(sslContextFactory -> new HttpClient(transport, sslContextFactory))
                 .orElseThrow(() -> new IllegalStateException("Cannot create http/2 client due to lack of ssl context factory"));
-        client.setMaxRequestsQueuedPerDestination(configFactory.getIntProperty(CONSUMER_HTTP2_CLIENT_MAX_REQUESTS_QUEUED_PER_DESTINATION));
+        client.setMaxRequestsQueuedPerDestination(http2ClientParameters.getMaxRequestsQueuedPerDestination());
         client.setCookieStore(new HttpCookieStore.Empty());
-        client.setIdleTimeout(configFactory.getIntProperty(CONSUMER_HTTP2_CLIENT_IDLE_TIMEOUT));
-        client.setFollowRedirects(configFactory.getBooleanProperty(CONSUMER_HTTP_CLIENT_FOLLOW_REDIRECTS));
+        client.setIdleTimeout(http2ClientParameters.getIdleTimeout().toMillis());
+        client.setFollowRedirects(http2ClientParameters.isFollowRedirectsEnabled());
+        client.setConnectTimeout(http2ClientParameters.getConnectionTimeout().toMillis());
         return client;
     }
 }

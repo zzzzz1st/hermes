@@ -9,25 +9,24 @@ import org.apache.kafka.clients.admin.Config;
 import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.admin.DescribeConfigsResult;
 import org.apache.kafka.common.config.ConfigResource;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
+import org.jetbrains.annotations.NotNull;
 
+import java.time.Duration;
 import java.util.Map;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.kafka.common.config.ConfigResource.Type.TOPIC;
 import static org.apache.kafka.common.config.TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG;
-import static pl.allegro.tech.hermes.common.config.Configs.KAFKA_PRODUCER_METADATA_MAX_AGE;
 
 public class KafkaTopicMetadataFetcher {
     private final LoadingCache<String, Integer> minInSyncReplicasCache;
     private final AdminClient adminClient;
 
-    KafkaTopicMetadataFetcher(AdminClient adminClient, ConfigFactory configFactory) {
+    KafkaTopicMetadataFetcher(AdminClient adminClient, Duration metadataMaxAge) {
         this.adminClient = adminClient;
-        int metadataMaxAgeInMs = configFactory.getIntProperty(KAFKA_PRODUCER_METADATA_MAX_AGE);
         this.minInSyncReplicasCache = CacheBuilder
                 .newBuilder()
-                .expireAfterWrite(metadataMaxAgeInMs, MILLISECONDS)
+                .expireAfterWrite(metadataMaxAge.toMillis(), MILLISECONDS)
                 .build(new MinInSyncReplicasLoader());
     }
 
@@ -42,7 +41,7 @@ public class KafkaTopicMetadataFetcher {
     private class MinInSyncReplicasLoader extends CacheLoader<String, Integer> {
 
         @Override
-        public Integer load(String kafkaTopicName) throws Exception {
+        public Integer load(@NotNull String kafkaTopicName) throws Exception {
             ConfigResource resource = new ConfigResource(TOPIC, kafkaTopicName);
             DescribeConfigsResult describeTopicsResult = adminClient.describeConfigs(ImmutableList.of(resource));
             Map<ConfigResource, Config> configMap = describeTopicsResult.all().get();

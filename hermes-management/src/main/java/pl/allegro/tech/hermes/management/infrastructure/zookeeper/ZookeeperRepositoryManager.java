@@ -6,21 +6,20 @@ import pl.allegro.tech.hermes.common.admin.AdminTool;
 import pl.allegro.tech.hermes.common.admin.zookeeper.ZookeeperAdminTool;
 import pl.allegro.tech.hermes.common.exception.InternalProcessingException;
 import pl.allegro.tech.hermes.common.kafka.offset.SubscriptionOffsetChangeIndicator;
-import pl.allegro.tech.hermes.common.message.undelivered.UndeliveredMessageLog;
-import pl.allegro.tech.hermes.common.message.undelivered.ZookeeperUndeliveredMessageLog;
+import pl.allegro.tech.hermes.common.message.undelivered.LastUndeliveredMessageReader;
+import pl.allegro.tech.hermes.common.message.undelivered.ZookeeperLastUndeliveredMessageReader;
 import pl.allegro.tech.hermes.domain.CredentialsRepository;
-import pl.allegro.tech.hermes.domain.readiness.ReadinessRepository;
 import pl.allegro.tech.hermes.domain.group.GroupRepository;
 import pl.allegro.tech.hermes.domain.oauth.OAuthProviderRepository;
 import pl.allegro.tech.hermes.domain.subscription.SubscriptionRepository;
 import pl.allegro.tech.hermes.domain.topic.TopicRepository;
 import pl.allegro.tech.hermes.domain.topic.preview.MessagePreviewRepository;
 import pl.allegro.tech.hermes.domain.workload.constraints.WorkloadConstraintsRepository;
+import pl.allegro.tech.hermes.infrastructure.dc.DatacenterNameProvider;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperCredentialsRepository;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperMessagePreviewRepository;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperOAuthProviderRepository;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperPaths;
-import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperDatacenterReadinessRepository;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperSubscriptionOffsetChangeIndicator;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperSubscriptionRepository;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperTopicRepository;
@@ -29,16 +28,17 @@ import pl.allegro.tech.hermes.management.config.storage.ZookeeperGroupRepository
 import pl.allegro.tech.hermes.management.domain.blacklist.TopicBlacklistRepository;
 import pl.allegro.tech.hermes.management.domain.dc.DatacenterBoundRepositoryHolder;
 import pl.allegro.tech.hermes.management.domain.dc.RepositoryManager;
+import pl.allegro.tech.hermes.management.domain.readiness.ReadinessRepository;
 import pl.allegro.tech.hermes.management.domain.retransmit.OfflineRetransmissionRepository;
 import pl.allegro.tech.hermes.management.infrastructure.blacklist.ZookeeperTopicBlacklistRepository;
-import pl.allegro.tech.hermes.management.infrastructure.dc.DatacenterNameProvider;
+import pl.allegro.tech.hermes.management.infrastructure.readiness.ZookeeperDatacenterReadinessRepository;
+import pl.allegro.tech.hermes.management.infrastructure.retransmit.ZookeeperOfflineRetransmissionRepository;
 
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
-import pl.allegro.tech.hermes.management.infrastructure.retransmit.ZookeeperOfflineRetransmissionRepository;
 
 public class ZookeeperRepositoryManager implements RepositoryManager {
 
@@ -46,11 +46,7 @@ public class ZookeeperRepositoryManager implements RepositoryManager {
     private final ObjectMapper mapper;
     private final ZookeeperPaths paths;
     private final ZookeeperClientManager clientManager;
-    private ZookeeperGroupRepositoryFactory zookeeperGroupRepositoryFactory;
-    private Integer adminReaperInterval;
-
     private final Map<Class<?>, Object> repositoryByType = new HashMap<>();
-
     private final Map<String, GroupRepository> groupRepositoriesByDc = new HashMap<>();
     private final Map<String, CredentialsRepository> credentialsRepositoriesByDc = new HashMap<>();
     private final Map<String, TopicRepository> topicRepositoriesByDc = new HashMap<>();
@@ -60,23 +56,22 @@ public class ZookeeperRepositoryManager implements RepositoryManager {
     private final Map<String, MessagePreviewRepository> messagePreviewRepositoriesByDc = new HashMap<>();
     private final Map<String, TopicBlacklistRepository> topicBlacklistRepositoriesByDc = new HashMap<>();
     private final Map<String, WorkloadConstraintsRepository> workloadConstraintsRepositoriesByDc = new HashMap<>();
-    private final Map<String, UndeliveredMessageLog> undeliveredMessageLogsByDc = new HashMap<>();
+    private final Map<String, LastUndeliveredMessageReader> lastUndeliveredMessageReaderByDc = new HashMap<>();
     private final Map<String, AdminTool> adminToolByDc = new HashMap<>();
     private final Map<String, ReadinessRepository> readinessRepositoriesByDc = new HashMap<>();
     private final Map<String, OfflineRetransmissionRepository> offlineRetransmissionRepositoriesByDc = new HashMap<>();
+    private final ZookeeperGroupRepositoryFactory zookeeperGroupRepositoryFactory;
 
     public ZookeeperRepositoryManager(ZookeeperClientManager clientManager,
                                       DatacenterNameProvider datacenterNameProvider,
                                       ObjectMapper mapper,
                                       ZookeeperPaths paths,
-                                      ZookeeperGroupRepositoryFactory zookeeperGroupRepositoryFactory,
-                                      Integer adminReaperInterval) {
+                                      ZookeeperGroupRepositoryFactory zookeeperGroupRepositoryFactory) {
         this.datacenterNameProvider = datacenterNameProvider;
         this.mapper = mapper;
         this.paths = paths;
         this.clientManager = clientManager;
         this.zookeeperGroupRepositoryFactory = zookeeperGroupRepositoryFactory;
-        this.adminReaperInterval = adminReaperInterval;
         initRepositoryTypeMap();
     }
 
@@ -86,41 +81,45 @@ public class ZookeeperRepositoryManager implements RepositoryManager {
             CuratorFramework zookeeper = client.getCuratorFramework();
 
             GroupRepository groupRepository = zookeeperGroupRepositoryFactory.create(zookeeper, mapper, paths);
+            groupRepositoriesByDc.put(dcName, groupRepository);
+
             CredentialsRepository credentialsRepository = new ZookeeperCredentialsRepository(zookeeper, mapper, paths);
+            credentialsRepositoriesByDc.put(dcName, credentialsRepository);
+
             TopicRepository topicRepository = new ZookeeperTopicRepository(zookeeper, mapper, paths, groupRepository);
-            SubscriptionRepository subscriptionRepository = new ZookeeperSubscriptionRepository(zookeeper, mapper,
-                    paths, topicRepository);
-            OAuthProviderRepository oAuthProviderRepository = new ZookeeperOAuthProviderRepository(zookeeper, mapper,
-                    paths);
+            topicRepositoriesByDc.put(dcName, topicRepository);
+
+            SubscriptionRepository subscriptionRepository = new ZookeeperSubscriptionRepository(zookeeper, mapper, paths, topicRepository);
+            subscriptionRepositoriesByDc.put(dcName, subscriptionRepository);
+
+            OAuthProviderRepository oAuthProviderRepository = new ZookeeperOAuthProviderRepository(zookeeper, mapper, paths);
+            oAuthProviderRepositoriesByDc.put(dcName, oAuthProviderRepository);
+
             SubscriptionOffsetChangeIndicator offsetChangeIndicator =
                     new ZookeeperSubscriptionOffsetChangeIndicator(zookeeper, paths, subscriptionRepository);
-            MessagePreviewRepository messagePreviewRepository = new ZookeeperMessagePreviewRepository(zookeeper, mapper,
-                    paths);
-            TopicBlacklistRepository topicBlacklistRepository = new ZookeeperTopicBlacklistRepository(zookeeper, mapper,
-                    paths);
-            WorkloadConstraintsRepository workloadConstraintsRepository = new ZookeeperWorkloadConstraintsRepository(
-                    zookeeper, mapper, paths);
-            UndeliveredMessageLog undeliveredMessageLog = new ZookeeperUndeliveredMessageLog(zookeeper, paths, mapper);
-            AdminTool adminTool = new ZookeeperAdminTool(paths, client.getCuratorFramework(),
-                    mapper, adminReaperInterval);
+            offsetChangeIndicatorsByDc.put(dcName, offsetChangeIndicator);
+
+            MessagePreviewRepository messagePreviewRepository = new ZookeeperMessagePreviewRepository(zookeeper, mapper, paths);
+            messagePreviewRepositoriesByDc.put(dcName, messagePreviewRepository);
+
+            TopicBlacklistRepository topicBlacklistRepository = new ZookeeperTopicBlacklistRepository(zookeeper, mapper, paths);
+            topicBlacklistRepositoriesByDc.put(dcName, topicBlacklistRepository);
+
+            WorkloadConstraintsRepository workloadConstraintsRepository =
+                    new ZookeeperWorkloadConstraintsRepository(zookeeper, mapper, paths);
+            workloadConstraintsRepositoriesByDc.put(dcName, workloadConstraintsRepository);
+
+            LastUndeliveredMessageReader lastUndeliveredMessageReader = new ZookeeperLastUndeliveredMessageReader(zookeeper, paths, mapper);
+            lastUndeliveredMessageReaderByDc.put(dcName, lastUndeliveredMessageReader);
+
+            AdminTool adminTool = new ZookeeperAdminTool(paths, client.getCuratorFramework(), mapper);
+            adminToolByDc.put(dcName, adminTool);
 
             ReadinessRepository readinessRepository = new ZookeeperDatacenterReadinessRepository(zookeeper, mapper, paths);
+            readinessRepositoriesByDc.put(dcName, readinessRepository);
+
             ZookeeperOfflineRetransmissionRepository offlineRetransmissionRepository =
                     new ZookeeperOfflineRetransmissionRepository(zookeeper, mapper, paths);
-            adminTool.start();
-
-            groupRepositoriesByDc.put(dcName, groupRepository);
-            credentialsRepositoriesByDc.put(dcName, credentialsRepository);
-            topicRepositoriesByDc.put(dcName, topicRepository);
-            subscriptionRepositoriesByDc.put(dcName, subscriptionRepository);
-            oAuthProviderRepositoriesByDc.put(dcName, oAuthProviderRepository);
-            offsetChangeIndicatorsByDc.put(dcName, offsetChangeIndicator);
-            messagePreviewRepositoriesByDc.put(dcName, messagePreviewRepository);
-            topicBlacklistRepositoriesByDc.put(dcName, topicBlacklistRepository);
-            workloadConstraintsRepositoriesByDc.put(dcName, workloadConstraintsRepository);
-            undeliveredMessageLogsByDc.put(dcName, undeliveredMessageLog);
-            adminToolByDc.put(dcName, adminTool);
-            readinessRepositoriesByDc.put(dcName, readinessRepository);
             offlineRetransmissionRepositoriesByDc.put(dcName, offlineRetransmissionRepository);
         }
     }
@@ -130,8 +129,8 @@ public class ZookeeperRepositoryManager implements RepositoryManager {
         T repository = getRepositoriesByType(repositoryType).get(dcName);
 
         if (repository == null) {
-            throw new InternalProcessingException("Failed to find '" + repositoryType.getSimpleName() +
-                    "' bound with DC '" + dcName + "'.");
+            throw new InternalProcessingException("Failed to find '" + repositoryType.getSimpleName()
+                    + "' bound with DC '" + dcName + "'.");
         }
 
         return new DatacenterBoundRepositoryHolder<>(repository, dcName);
@@ -165,7 +164,7 @@ public class ZookeeperRepositoryManager implements RepositoryManager {
         repositoryByType.put(MessagePreviewRepository.class, messagePreviewRepositoriesByDc);
         repositoryByType.put(TopicBlacklistRepository.class, topicBlacklistRepositoriesByDc);
         repositoryByType.put(WorkloadConstraintsRepository.class, workloadConstraintsRepositoriesByDc);
-        repositoryByType.put(UndeliveredMessageLog.class, undeliveredMessageLogsByDc);
+        repositoryByType.put(LastUndeliveredMessageReader.class, lastUndeliveredMessageReaderByDc);
         repositoryByType.put(AdminTool.class, adminToolByDc);
         repositoryByType.put(ReadinessRepository.class, readinessRepositoriesByDc);
         repositoryByType.put(OfflineRetransmissionRepository.class, offlineRetransmissionRepositoriesByDc);

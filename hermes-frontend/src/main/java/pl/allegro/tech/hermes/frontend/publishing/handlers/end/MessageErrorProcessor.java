@@ -11,10 +11,10 @@ import pl.allegro.tech.hermes.api.Topic;
 import pl.allegro.tech.hermes.frontend.publishing.handlers.AttachmentContent;
 import pl.allegro.tech.hermes.tracker.frontend.Trackers;
 
-import javax.inject.Inject;
-import javax.ws.rs.core.MediaType;
 import java.io.IOException;
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import javax.ws.rs.core.MediaType;
 
 import static pl.allegro.tech.hermes.api.ErrorCode.INTERNAL_ERROR;
 import static pl.allegro.tech.hermes.api.ErrorDescription.error;
@@ -26,27 +26,32 @@ public class MessageErrorProcessor {
     private final ObjectMapper objectMapper;
     private final Trackers trackers;
     private final HttpString messageIdHeader = new HttpString(MESSAGE_ID.getName());
+    private final TrackingHeadersExtractor trackingHeadersExtractor;
 
-    @Inject
-    public MessageErrorProcessor(ObjectMapper objectMapper, Trackers trackers) {
+    public MessageErrorProcessor(ObjectMapper objectMapper, Trackers trackers,
+                                 TrackingHeadersExtractor trackingHeadersExtractor) {
         this.objectMapper = objectMapper;
         this.trackers = trackers;
+        this.trackingHeadersExtractor = trackingHeadersExtractor;
     }
 
     public void sendAndLog(HttpServerExchange exchange, Topic topic, String messageId, ErrorDescription error) {
         sendQuietly(exchange, error, messageId, topic.getQualifiedName());
-        log(error.getMessage(), topic, messageId, readHostAndPort(exchange));
+        log(error.getMessage(), topic, messageId, readHostAndPort(exchange),
+                trackingHeadersExtractor.extractHeadersToLog(exchange.getRequestHeaders()));
     }
 
     public void sendAndLog(HttpServerExchange exchange, Topic topic, String messageId, ErrorDescription error, Exception exception) {
         sendQuietly(exchange, error, messageId, topic.getQualifiedName());
-        log(error.getMessage(), topic, messageId, readHostAndPort(exchange), exception);
+        log(error.getMessage(), topic, messageId, readHostAndPort(exchange), exception,
+                trackingHeadersExtractor.extractHeadersToLog(exchange.getRequestHeaders()));
     }
 
     public void sendAndLog(HttpServerExchange exchange, Topic topic, String messageId, Exception e) {
         ErrorDescription error = error("Error while handling request.", INTERNAL_ERROR);
         sendQuietly(exchange, error, messageId, topic.getQualifiedName());
-        log(error.getMessage(), topic, messageId, readHostAndPort(exchange), e);
+        log(error.getMessage(), topic, messageId, readHostAndPort(exchange), e,
+                trackingHeadersExtractor.extractHeadersToLog(exchange.getRequestHeaders()));
     }
 
     public void sendAndLog(HttpServerExchange exchange, String errorMessage, Exception e) {
@@ -60,13 +65,13 @@ public class MessageErrorProcessor {
                 if (!exchange.isResponseStarted()) {
                     send(exchange, error, messageId);
                 } else {
-                    logger.warn("Not sending error message to a client as response has already been started. " +
-                                    "Error message: {} Topic: {} MessageId: {} Host: {}",
+                    logger.warn("Not sending error message to a client as response has already been started. "
+                                    + "Error message: {} Topic: {} MessageId: {} Host: {}",
                             error.getMessage(), topicName, messageId, readHostAndPort(exchange));
                 }
             } else {
-                logger.warn("Connection to a client closed. Can't send error response. " +
-                                "Error message: {} Topic: {} MessageId: {} Host: {}",
+                logger.warn("Connection to a client closed. Can't send error response. "
+                                + "Error message: {} Topic: {} MessageId: {} Host: {}",
                         error.getMessage(), topicName, messageId, readHostAndPort(exchange));
                 exchange.endExchange();
             }
@@ -78,41 +83,47 @@ public class MessageErrorProcessor {
 
     public void log(HttpServerExchange exchange, String errorMessage, Exception exception) {
         AttachmentContent attachment = exchange.getAttachment(AttachmentContent.KEY);
-        log(errorMessage, attachment.getTopic(), attachment.getMessageId(), readHostAndPort(exchange), exception);
+        log(errorMessage, attachment.getTopic(), attachment.getMessageId(), readHostAndPort(exchange), exception,
+                trackingHeadersExtractor.extractHeadersToLog(exchange.getRequestHeaders()));
+    }
+
+    private void log(String errorMessage,
+                     Topic topic,
+                     String messageId,
+                     String hostAndPort,
+                     Map<String, String> extraRequestHeaders) {
+        logger.error(errorMessage
+                + "; publishing on topic: "
+                + topic.getQualifiedName()
+                + "; message id: "
+                + messageId
+                + "; remote host: "
+                + hostAndPort);
+        trackers.get(topic).logError(messageId, topic.getName(), errorMessage, hostAndPort, extraRequestHeaders);
+    }
+
+    private void log(String errorMessage,
+                     Topic topic,
+                     String messageId,
+                     String hostAndPort,
+                     Exception exception,
+                     Map<String, String> extraRequestHeaders) {
+        logger.error(errorMessage
+                        + "; publishing on topic: "
+                        + topic.getQualifiedName()
+                        + "; message id: "
+                        + messageId
+                        + "; remote host: "
+                        + hostAndPort,
+                exception);
+        trackers.get(topic).logError(messageId, topic.getName(), errorMessage, hostAndPort, extraRequestHeaders);
     }
 
     private void send(HttpServerExchange exchange, ErrorDescription error, String messageId) throws IOException {
         exchange.setStatusCode(error.getCode().getHttpCode());
         exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, MediaType.APPLICATION_JSON);
         exchange.getResponseHeaders().add(messageIdHeader, messageId);
-        exchange.getResponseSender().send(objectMapper.writeValueAsString(error), Charset.forName("UTF-8"),
+        exchange.getResponseSender().send(objectMapper.writeValueAsString(error), StandardCharsets.UTF_8,
                 ResponseReadyIoCallback.INSTANCE);
-    }
-
-    private void log(String errorMessage, Topic topic, String messageId, String hostAndPort) {
-        logger.error(new StringBuilder()
-                .append(errorMessage)
-                .append("; publishing on topic: ")
-                .append(topic.getQualifiedName())
-                .append("; message id: ")
-                .append(messageId)
-                .append("; remote host: ")
-                .append(hostAndPort)
-                .toString());
-        trackers.get(topic).logError(messageId, topic.getName(), errorMessage, hostAndPort);
-    }
-
-    private void log(String errorMessage, Topic topic, String messageId, String hostAndPort, Exception exception) {
-        logger.error(new StringBuilder()
-                        .append(errorMessage)
-                        .append("; publishing on topic: ")
-                        .append(topic.getQualifiedName())
-                        .append("; message id: ")
-                        .append(messageId)
-                        .append("; remote host: ")
-                        .append(hostAndPort)
-                        .toString(),
-                exception);
-        trackers.get(topic).logError(messageId, topic.getName(), errorMessage, hostAndPort);
     }
 }

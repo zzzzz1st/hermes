@@ -5,13 +5,9 @@ import org.apache.avro.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pl.allegro.tech.hermes.api.Topic;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
-import pl.allegro.tech.hermes.common.config.Configs;
 import pl.allegro.tech.hermes.schema.CompiledSchema;
 import pl.allegro.tech.hermes.schema.SchemaRepository;
 import pl.allegro.tech.hermes.schema.SchemaVersion;
-
-import javax.inject.Inject;
 
 public class AvroMessageSchemaVersionTruncationContentWrapper implements AvroMessageContentUnwrapper {
 
@@ -24,26 +20,13 @@ public class AvroMessageSchemaVersionTruncationContentWrapper implements AvroMes
     private final Counter deserializationWithSchemaVersionTruncation;
     private final Counter deserializationErrorsWithSchemaVersionTruncation;
 
-    @Inject
     public AvroMessageSchemaVersionTruncationContentWrapper(SchemaRepository schemaRepository,
                                                             AvroMessageContentWrapper avroMessageContentWrapper,
                                                             DeserializationMetrics deserializationMetrics,
-                                                            ConfigFactory configFactory) {
-        this(
-            schemaRepository,
-            avroMessageContentWrapper,
-            deserializationMetrics,
-            configFactory.getBooleanProperty(Configs.SCHEMA_VERSION_TRUNCATION_ENABLED)
-        );
-    }
-
-    public AvroMessageSchemaVersionTruncationContentWrapper(SchemaRepository schemaRepository,
-                                                            AvroMessageContentWrapper avroMessageContentWrapper,
-                                                            DeserializationMetrics deserializationMetrics,
-                                                            boolean magicByteTruncationEnabled) {
+                                                            boolean schemaVersionTruncationEnabled) {
         this.schemaRepository = schemaRepository;
         this.avroMessageContentWrapper = avroMessageContentWrapper;
-        this.magicByteTruncationEnabled = magicByteTruncationEnabled;
+        this.magicByteTruncationEnabled = schemaVersionTruncationEnabled;
 
         this.deserializationErrorsWithSchemaVersionTruncation = deserializationMetrics.errorsForSchemaVersionTruncation();
         this.deserializationWithSchemaVersionTruncation = deserializationMetrics.usingSchemaVersionTruncation();
@@ -58,7 +41,8 @@ public class AvroMessageSchemaVersionTruncationContentWrapper implements AvroMes
             byte[] dataWithoutMagicByteAndSchemaId = SchemaAwareSerDe.trimMagicByteAndSchemaVersion(data);
             CompiledSchema<Schema> avroSchema = schemaRepository.getAvroSchema(topic, SchemaVersion.valueOf(schemaVersion));
 
-            return AvroMessageContentUnwrapperResult.success(avroMessageContentWrapper.unwrapContent(dataWithoutMagicByteAndSchemaId, avroSchema));
+            return AvroMessageContentUnwrapperResult.success(
+                    avroMessageContentWrapper.unwrapContent(dataWithoutMagicByteAndSchemaId, avroSchema));
         } catch (Exception e) {
             logger.warn(
                     "Could not unwrap content for topic [{}] using schema id provided in header [{}] - falling back",

@@ -3,7 +3,8 @@
 Hermes Frontend API has option to register callbacks triggered during different phases of message lifetime:
 
 * BrokerAcknowledgedListener: message has been acknowledged by broker, can be considered as persisted
-* BrokerTimeoutListener: broker did not save message in time, it is now stored in memory buffer and retried until  successful
+* BrokerTimeoutListener: broker did not save message in time, it is now stored in memory buffer and retried until
+  successful
 * BrokerErrorListener: there was some kind of error (e.g. no connection to broker) when trying to send message to broker
 
 ## ChronicleMap implementation
@@ -23,23 +24,23 @@ This might be useful when reviving Frontend nodes that have been down for a long
 Option                                          | Description                                            | Default value
 ----------------------------------------------- | ------------------------------------------------------ | --------------
 frontend.messages.local.storage.enabled         | enable persistent buffer                               | false
-frontend.messages.local.storage.max.age.hours   | ignore messages in buffer that are older than N hours  | 72
+frontend.messages.local.storage.maxAge          | ignore messages in buffer that are older than N hours  | 72h
 frontend.messages.local.storage.directory       | location of memory mapped files                        | /tmp/<tmp dir>
 
 ### Buffer files
 
 Buffer is persisted into `hermes-buffer.dat` file in storage directory. On startup, if previous persistence file exists,
-it is renamed to `hermes-buffer-<timestamp>.dat`. This is a temporary file, deleted after all messages are
-read and sent to Kafka.
+it is renamed to `hermes-buffer-<timestamp>.dat`. This is a temporary file, deleted after all messages are read and sent
+to Kafka.
 
 ## Custom implementation
 
-To register callbacks use methods exposed in `HermesFrontend.Builder`:
+To register custom callbacks register the implementations as beans:
 
 ```java
-class BrokerListener implements BrokerAcknowledgedListener,
-                                BrokerTimeoutListener,
-                                BrokerErrorListener {
+class MyCustomBrokerListener implements BrokerAcknowledgedListener,
+        BrokerTimeoutListener,
+        BrokerErrorListener {
 
     @Override
     public void onAcknowledge(Message message, Topic topic) {
@@ -56,16 +57,23 @@ class BrokerListener implements BrokerAcknowledgedListener,
         /* ... */
     }
 }
+```
 
-class HermesStarter {
+```java
+@Configuration
+public class CustomHermesFrontendConfiguration {
 
-    public void start(BrokerListener listener) {
-        HermesFrontend frontend = HermesFrontend.frontend()
-            .withBrokerAcknowledgeListener(brokerListener)
-            .withBrokerTimeoutListener(brokerListener)
-            .withBrokerErrorListener(brokerListener)
-            .build();
-        frontend.start();
+    @Primary
+    @Bean
+    public BrokerListeners myBrokerListeners() {
+        BrokerListener customBrokerListener = new MyCustomBrokerListener();
+        BrokerListeners brokerListeners = new BrokerListeners();
+
+        brokerListeners.addAcknowledgeListener(customBrokerListener);
+        brokerListeners.addTimeoutListener(customBrokerListener);
+        brokerListeners.addErrorListener(customBrokerListener);
+
+        return brokerListeners;
     }
 }
 ```

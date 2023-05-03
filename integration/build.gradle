@@ -1,6 +1,6 @@
 repositories {
-    jcenter()
-    maven { url 'http://repository.jboss.org/nexus/content/groups/public' }
+    mavenCentral()
+    maven { url 'https://repository.jboss.org/nexus/content/groups/public' }
 }
 
 project.configurations {
@@ -20,14 +20,12 @@ dependencies {
     compile project(':hermes-management')
     compile project(':hermes-client')
     compile project(':hermes-tracker')
-    compile project(':hermes-tracker-mongo')
 
     testCompile project(':hermes-test-helper')
     testCompile group: 'org.apache.commons', name: 'commons-lang3', version: '3.0'
     testCompile group: 'commons-beanutils', name: 'commons-beanutils', version: '1.9.4'
     testCompile group: 'org.apache.curator', name: 'curator-test', version: versions.curator
-    testCompile group: 'com.github.fakemongo', name: 'fongo', version: versions.fongo
-    testCompile group: 'org.springframework', name: 'spring-web', version: versions.spring_web
+    testCompile group: 'org.springframework', name: 'spring-webflux', version: versions.spring_web
     testCompile group: 'com.squareup.okhttp3', name: 'okhttp', version: versions.okhttp
 
     testCompile group: 'org.testcontainers', name: 'testcontainers', version: versions.testcontainers
@@ -76,6 +74,11 @@ task integrationTest(type: Test) {
     if (project.hasProperty('tests.timeout.multiplier')) {
         args += "-Dtests.timeout.multiplier=${project.property('tests.timeout.multiplier')}"
     }
+
+    if (project.hasProperty("confluentImagesTag")) {
+        args += "-DconfluentImagesTag=${project.property("confluentImagesTag")}"
+    }
+
     jvmArgs = args
     minHeapSize "2000m"
     maxHeapSize "3500m"
@@ -86,7 +89,9 @@ task integrationTest(type: Test) {
     testClassesDirs = project.sourceSets.integration.output.classesDirs
     classpath = project.sourceSets.integration.runtimeClasspath
 
-    useTestNG()
+    useTestNG {
+        preserveOrder true
+    }
 
     testLogging {
         exceptionFormat = 'full'

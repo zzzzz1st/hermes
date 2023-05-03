@@ -10,7 +10,6 @@ import pl.allegro.tech.hermes.api.TopicName;
 import pl.allegro.tech.hermes.common.exception.InternalProcessingException;
 import pl.allegro.tech.hermes.domain.group.GroupRepository;
 import pl.allegro.tech.hermes.domain.topic.TopicAlreadyExistsException;
-import pl.allegro.tech.hermes.domain.topic.TopicNotEmptyException;
 import pl.allegro.tech.hermes.domain.topic.TopicNotExistsException;
 import pl.allegro.tech.hermes.domain.topic.TopicRepository;
 
@@ -70,11 +69,7 @@ public class ZookeeperTopicRepository extends ZookeeperBasedRepository implement
         logger.info("Creating topic for path {}", topicPath);
 
         try {
-            zookeeper.inTransaction()
-                    .create().forPath(topicPath, mapper.writeValueAsBytes(topic))
-                    .and()
-                    .create().forPath(paths.subscriptionsPath(topic.getName()))
-                    .and().commit();
+            createInTransaction(topicPath, topic, paths.subscriptionsPath(topic.getName()));
         } catch (KeeperException.NodeExistsException ex) {
             throw new TopicAlreadyExistsException(topic.getName(), ex);
         } catch (Exception ex) {
@@ -85,18 +80,11 @@ public class ZookeeperTopicRepository extends ZookeeperBasedRepository implement
     @Override
     public void removeTopic(TopicName topicName) {
         ensureTopicExists(topicName);
-        ensureTopicHasNoSubscriptions(topicName);
         logger.info("Removing topic: " + topicName);
-        remove(paths.topicPath(topicName));
-    }
-
-    @Override
-    public void ensureTopicHasNoSubscriptions(TopicName topicName) {
-        List<String> children = childrenOf(paths.subscriptionsPath(topicName));
-        boolean anyNodeNotEmpty = children.stream()
-                .anyMatch(sub -> !isEmpty(paths.subscriptionsPath(topicName) + "/" + sub));
-        if (!children.isEmpty() && anyNodeNotEmpty) {
-            throw new TopicNotEmptyException(topicName);
+        try {
+            remove(paths.topicPath(topicName));
+        } catch (Exception e) {
+            throw new InternalProcessingException(e);
         }
     }
 
@@ -105,7 +93,11 @@ public class ZookeeperTopicRepository extends ZookeeperBasedRepository implement
         ensureTopicExists(topic.getName());
 
         logger.info("Updating topic: " + topic.getName());
-        overwrite(paths.topicPath(topic.getName()), topic);
+        try {
+            overwrite(paths.topicPath(topic.getName()), topic);
+        } catch (Exception e) {
+            throw new InternalProcessingException(e);
+        }
     }
 
     @Override
@@ -113,26 +105,16 @@ public class ZookeeperTopicRepository extends ZookeeperBasedRepository implement
         ensureTopicExists(topicName);
 
         logger.info("Touching topic: " + topicName.qualifiedName());
-        touch(paths.topicPath(topicName));
+        try {
+            touch(paths.topicPath(topicName));
+        } catch (Exception ex) {
+            throw new InternalProcessingException(ex);
+        }
     }
 
     @Override
     public Topic getTopicDetails(TopicName topicName) {
         return getTopicDetails(topicName, false).get();
-    }
-
-    @Override
-    public List<Topic> getTopicsDetails(Collection<TopicName> topicNames) {
-        return topicNames.stream()
-                .map(topicName -> getTopicDetails(topicName, true))
-                .filter(Optional::isPresent)
-                .map(Optional::get)
-                .collect(Collectors.toList());
-    }
-
-    @Override
-    public boolean isSubscribingRestricted(TopicName topicName) {
-        return getTopicDetails(topicName).isSubscribingRestricted();
     }
 
     private Optional<Topic> getTopicDetails(TopicName topicName, boolean quiet) {
@@ -146,5 +128,23 @@ public class ZookeeperTopicRepository extends ZookeeperBasedRepository implement
                 },
                 quiet
         );
+    }
+
+    @Override
+    public List<Topic> getTopicsDetails(Collection<TopicName> topicNames) {
+        return topicNames.stream()
+                .map(topicName -> getTopicDetails(topicName, true))
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Topic> listAllTopics() {
+        return groupRepository.listGroupNames()
+                .stream()
+                .map(this::listTopics)
+                .flatMap(List::stream)
+                .collect(Collectors.toList());
     }
 }

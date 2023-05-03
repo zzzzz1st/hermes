@@ -2,6 +2,7 @@ package pl.allegro.tech.hermes.management.config.storage;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.curator.framework.CuratorFramework;
+import org.slf4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -15,6 +16,10 @@ import pl.allegro.tech.hermes.domain.subscription.SubscriptionRepository;
 import pl.allegro.tech.hermes.domain.topic.TopicRepository;
 import pl.allegro.tech.hermes.domain.topic.preview.MessagePreviewRepository;
 import pl.allegro.tech.hermes.domain.workload.constraints.WorkloadConstraintsRepository;
+import pl.allegro.tech.hermes.infrastructure.dc.DatacenterNameProvider;
+import pl.allegro.tech.hermes.infrastructure.dc.DcNameSource;
+import pl.allegro.tech.hermes.infrastructure.dc.DefaultDatacenterNameProvider;
+import pl.allegro.tech.hermes.infrastructure.dc.EnvironmentVariableDatacenterNameProvider;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperCredentialsRepository;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperGroupRepository;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperMessagePreviewRepository;
@@ -29,10 +34,6 @@ import pl.allegro.tech.hermes.management.domain.dc.MultiDatacenterRepositoryQuer
 import pl.allegro.tech.hermes.management.domain.mode.ModeService;
 import pl.allegro.tech.hermes.management.domain.retransmit.OfflineRetransmissionRepository;
 import pl.allegro.tech.hermes.management.infrastructure.blacklist.ZookeeperTopicBlacklistRepository;
-import pl.allegro.tech.hermes.management.infrastructure.dc.DatacenterNameProvider;
-import pl.allegro.tech.hermes.management.infrastructure.dc.DcNameSource;
-import pl.allegro.tech.hermes.management.infrastructure.dc.DefaultDatacenterNameProvider;
-import pl.allegro.tech.hermes.management.infrastructure.dc.EnvironmentVariableDatacenterNameProvider;
 import pl.allegro.tech.hermes.management.infrastructure.metrics.SummedSharedCounter;
 import pl.allegro.tech.hermes.management.infrastructure.retransmit.ZookeeperOfflineRetransmissionRepository;
 import pl.allegro.tech.hermes.management.infrastructure.zookeeper.ZookeeperClient;
@@ -41,13 +42,14 @@ import pl.allegro.tech.hermes.management.infrastructure.zookeeper.ZookeeperRepos
 
 import javax.annotation.PostConstruct;
 
-import java.util.List;
-
 import static java.util.stream.Collectors.toList;
+import static org.slf4j.LoggerFactory.getLogger;
 
 @Configuration
 @EnableConfigurationProperties(StorageClustersProperties.class)
 public class StorageConfiguration {
+
+    private static final Logger logger = getLogger(StorageConfiguration.class);
 
     @Autowired
     StorageClustersProperties storageClustersProperties;
@@ -77,7 +79,7 @@ public class StorageConfiguration {
     @Bean(initMethod = "start")
     ZookeeperRepositoryManager repositoryManager(ZookeeperGroupRepositoryFactory zookeeperGroupRepositoryFactory) {
         return new ZookeeperRepositoryManager(clientManager(), dcNameProvider(), objectMapper,
-                zookeeperPaths(), zookeeperGroupRepositoryFactory, storageClustersProperties.getAdminReaperInterval());
+                zookeeperPaths(), zookeeperGroupRepositoryFactory);
     }
 
     @Bean
@@ -106,10 +108,11 @@ public class StorageConfiguration {
     @Bean
     SummedSharedCounter summedSharedCounter(ZookeeperClientManager manager) {
         return new SummedSharedCounter(
-                getCuratorClients(manager),
+                manager.getClients(),
                 storageClustersProperties.getSharedCountersExpiration(),
                 storageClustersProperties.getRetrySleep(),
-                storageClustersProperties.getRetryTimes());
+                storageClustersProperties.getRetryTimes()
+        );
     }
 
     @Bean
@@ -172,19 +175,13 @@ public class StorageConfiguration {
 
     @PostConstruct
     public void init() {
+        logger.info("Before ensuring init path exists");
         ensureInitPathExists();
+        logger.info("After ensuring init path exists");
     }
 
     private void ensureInitPathExists() {
         ZookeeperClientManager clientManager = clientManager();
-        for (ZookeeperClient client : clientManager.getClients()) {
-            client.ensurePathExists(zookeeperPaths().groupsPath());
-        }
-    }
-
-    private List<CuratorFramework> getCuratorClients(ZookeeperClientManager manager) {
-        return manager.getClients().stream()
-                .map(ZookeeperClient::getCuratorFramework)
-                .collect(toList());
+        clientManager.getLocalClient().ensurePathExists(zookeeperPaths().groupsPath());
     }
 }

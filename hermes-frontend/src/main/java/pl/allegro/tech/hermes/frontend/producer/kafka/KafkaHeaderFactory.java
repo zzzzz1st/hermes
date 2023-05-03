@@ -4,39 +4,29 @@ import com.google.common.primitives.Ints;
 import com.google.common.primitives.Longs;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeader;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
-import pl.allegro.tech.hermes.common.config.Configs;
-
-import javax.inject.Inject;
+import pl.allegro.tech.hermes.common.kafka.KafkaHeaderNameParameters;
 
 public class KafkaHeaderFactory {
 
-    private final String messageIdHeaderName;
-    private final String timestampHeaderName;
-    private final String schemaVersionHeaderName;
-    private final String schemaIdHeaderName;
+    private final KafkaHeaderNameParameters kafkaHeaderNameParameters;
 
-    @Inject
-    public KafkaHeaderFactory(ConfigFactory configFactory) {
-        this.messageIdHeaderName = configFactory.getStringProperty(Configs.KAFKA_HEADER_NAME_MESSAGE_ID);
-        this.timestampHeaderName = configFactory.getStringProperty(Configs.KAFKA_HEADER_NAME_TIMESTAMP);
-        this.schemaVersionHeaderName = configFactory.getStringProperty(Configs.KAFKA_HEADER_NAME_SCHEMA_VERSION);
-        this.schemaIdHeaderName = configFactory.getStringProperty(Configs.KAFKA_HEADER_NAME_SCHEMA_ID);
+    public KafkaHeaderFactory(KafkaHeaderNameParameters kafkaHeaderNameParameters) {
+        this.kafkaHeaderNameParameters = kafkaHeaderNameParameters;
     }
 
     Header messageId(String messageId) {
-        return new RecordHeader(messageIdHeaderName, messageId.getBytes());
+        return new RecordHeader(kafkaHeaderNameParameters.getMessageId(), messageId.getBytes());
     }
 
     Header timestamp(long timestamp) {
-        return new RecordHeader(timestampHeaderName, Longs.toByteArray(timestamp));
+        return new RecordHeader(kafkaHeaderNameParameters.getTimestamp(), Longs.toByteArray(timestamp));
     }
 
     Header schemaVersion(int schemaVersion) {
-        return new RecordHeader(schemaVersionHeaderName, Ints.toByteArray(schemaVersion));
+        return new RecordHeader(kafkaHeaderNameParameters.getSchemaVersion(), Ints.toByteArray(schemaVersion));
     }
 
     Header schemaId(int schemaId) {
-        return new RecordHeader(schemaIdHeaderName, Ints.toByteArray(schemaId));
+        return new RecordHeader(kafkaHeaderNameParameters.getSchemaId(), Ints.toByteArray(schemaId));
     }
 }

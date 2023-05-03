@@ -11,12 +11,17 @@ public class ChronicleMapEntryValue implements Serializable {
     private final long timestamp;
     private final String qualifiedTopicName;
     private final String partitionKey;
+    private final Integer schemaVersion;
+    private final Integer schemaId;
 
-    public ChronicleMapEntryValue(byte[] data, long timestamp, String qualifiedTopicName, String partitionKey) {
+    public ChronicleMapEntryValue(byte[] data, long timestamp, String qualifiedTopicName, String partitionKey,
+                                  Integer schemaVersion, Integer schemaId) {
         this.data = data;
         this.timestamp = timestamp;
         this.qualifiedTopicName = qualifiedTopicName;
         this.partitionKey = partitionKey;
+        this.schemaVersion = schemaVersion;
+        this.schemaId = schemaId;
     }
 
     public byte[] getData() {
@@ -35,19 +40,31 @@ public class ChronicleMapEntryValue implements Serializable {
         return partitionKey;
     }
 
+    public Integer getSchemaVersion() {
+        return schemaVersion;
+    }
+
+    public Integer getSchemaId() {
+        return schemaId;
+    }
+
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || !(o instanceof ChronicleMapEntryValue)) return false;
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof ChronicleMapEntryValue)) {
+            return false;
+        }
         ChronicleMapEntryValue that = (ChronicleMapEntryValue) o;
-        return Objects.equals(timestamp, that.timestamp) &&
-                Arrays.equals(data, that.data) &&
-                Objects.equals(qualifiedTopicName, that.qualifiedTopicName) &&
-                Objects.equals(partitionKey, that.partitionKey);
+        return Objects.equals(timestamp, that.timestamp)
+                && Arrays.equals(data, that.data)
+                && Objects.equals(qualifiedTopicName, that.qualifiedTopicName)
+                && Objects.equals(partitionKey, that.partitionKey);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(data, timestamp, qualifiedTopicName, partitionKey);
+        return Objects.hash(data, timestamp, qualifiedTopicName, partitionKey, schemaVersion, schemaId);
     }
 }

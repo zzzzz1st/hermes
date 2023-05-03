@@ -1,6 +1,7 @@
 package pl.allegro.tech.hermes.tracker.elasticsearch.management;
 
 import com.codahale.metrics.MetricRegistry;
+import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.AfterSuite;
 import org.testng.annotations.BeforeSuite;
 import org.testng.annotations.Test;
@@ -29,11 +30,13 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static com.jayway.awaitility.Awaitility.await;
 import static com.jayway.awaitility.Duration.ONE_MINUTE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static pl.allegro.tech.hermes.api.SentMessageTraceStatus.DISCARDED;
+import static pl.allegro.tech.hermes.common.http.ExtraRequestHeadersCollector.extraRequestHeadersCollector;
 
 public class ElasticsearchLogRepositoryTest implements LogSchemaAware {
 
@@ -92,7 +95,8 @@ public class ElasticsearchLogRepositoryTest implements LogSchemaAware {
         consumersLogRepository.logDiscarded(secondDiscarded, secondTimestamp, REASON_MESSAGE);
 
         // then
-        assertThat(fetchLastUndelivered(topic, subscription)).containsExactly(sentMessageTrace(secondDiscarded, secondTimestamp, DISCARDED));
+        assertThat(fetchLastUndelivered(topic, subscription))
+            .containsExactly(sentMessageTrace(secondDiscarded, secondTimestamp, DISCARDED));
     }
 
     @Test
@@ -100,13 +104,14 @@ public class ElasticsearchLogRepositoryTest implements LogSchemaAware {
         //given
         MessageMetadata messageMetadata = TestMessageMetadata.of("1234", "elasticsearch.messageStatus", "subscription");
         long timestamp = System.currentTimeMillis();
+        ImmutableMap<String, String> extraRequestHeaders = ImmutableMap.of("x-header1", "value1", "x-header2", "value2");
 
-        frontendLogRepository.logPublished("1234", timestamp, "elasticsearch.messageStatus", "localhost");
+        frontendLogRepository.logPublished("1234", timestamp, "elasticsearch.messageStatus", "localhost", extraRequestHeaders);
         consumersLogRepository.logSuccessful(messageMetadata, "localhost", timestamp);
 
         //when
         assertThat(fetchMessageStatus(messageMetadata))
-                .contains(publishedMessageTrace(messageMetadata, timestamp, PublishedMessageTraceStatus.SUCCESS))
+                .contains(publishedMessageTrace(messageMetadata, extraRequestHeaders, timestamp, PublishedMessageTraceStatus.SUCCESS))
                 .contains(sentMessageTrace(messageMetadata, timestamp, SentMessageTraceStatus.SUCCESS));
     }
 
@@ -135,26 +140,31 @@ public class ElasticsearchLogRepositoryTest implements LogSchemaAware {
     }
 
     private SentMessageTrace sentMessageTrace(MessageMetadata messageMetadata, long timestamp, SentMessageTraceStatus status) {
-        return new SentMessageTrace(messageMetadata.getMessageId(),
-                messageMetadata.getBatchId(),
-                timestamp,
-                messageMetadata.getSubscription(),
-                messageMetadata.getTopic(),
-                status,
-                REASON_MESSAGE,
-                null,
-                messageMetadata.getPartition(),
-                messageMetadata.getOffset(),
-                CLUSTER_NAME);
+        return SentMessageTrace.Builder.sentMessageTrace(
+                        messageMetadata.getMessageId(),
+                        messageMetadata.getBatchId(),
+                        status
+                )
+                .withTimestamp(timestamp)
+                .withSubscription(messageMetadata.getSubscription())
+                .withTopicName(messageMetadata.getTopic())
+                .withReason(REASON_MESSAGE)
+                .withPartition(messageMetadata.getPartition())
+                .withOffset(messageMetadata.getOffset())
+                .withCluster(CLUSTER_NAME)
+                .build();
     }
 
-    private PublishedMessageTrace publishedMessageTrace(MessageMetadata messageMetadata, long timestamp, PublishedMessageTraceStatus status) {
+    private PublishedMessageTrace publishedMessageTrace(MessageMetadata messageMetadata, Map<String, String> extraRequestHeaders,
+                                                        long timestamp, PublishedMessageTraceStatus status) {
         return new PublishedMessageTrace(messageMetadata.getMessageId(),
                 timestamp,
                 messageMetadata.getTopic(),
                 status,
                 null,
                 null,
-                CLUSTER_NAME);
+                CLUSTER_NAME,
+                extraRequestHeaders.entrySet().stream()
+                    .collect(extraRequestHeadersCollector()));
     }
 }

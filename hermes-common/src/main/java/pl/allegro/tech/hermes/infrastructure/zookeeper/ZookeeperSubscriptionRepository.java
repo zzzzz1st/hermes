@@ -1,9 +1,6 @@
 package pl.allegro.tech.hermes.infrastructure.zookeeper;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-
-import java.time.Instant;
-import java.util.Collection;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.zookeeper.KeeperException;
 import org.slf4j.Logger;
@@ -17,6 +14,7 @@ import pl.allegro.tech.hermes.domain.subscription.SubscriptionNotExistsException
 import pl.allegro.tech.hermes.domain.subscription.SubscriptionRepository;
 import pl.allegro.tech.hermes.domain.topic.TopicRepository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -49,14 +47,13 @@ public class ZookeeperSubscriptionRepository extends ZookeeperBasedRepository im
 
     @Override
     public void createSubscription(Subscription subscription) {
-        ensureConnected();
         topicRepository.ensureTopicExists(subscription.getTopicName());
 
         String subscriptionPath = paths.subscriptionPath(subscription);
         logger.info("Creating subscription {}", subscription.getQualifiedName());
 
         try {
-            zookeeper.create().forPath(subscriptionPath, mapper.writeValueAsBytes(subscription));
+            create(subscriptionPath, subscription);
         } catch (KeeperException.NodeExistsException ex) {
             throw new SubscriptionAlreadyExistsException(subscription, ex);
         } catch (Exception ex) {
@@ -69,14 +66,22 @@ public class ZookeeperSubscriptionRepository extends ZookeeperBasedRepository im
         ensureSubscriptionExists(topicName, subscriptionName);
         logger.info("Removing subscription {}", new SubscriptionName(subscriptionName, topicName).getQualifiedName());
 
-        remove(paths.subscriptionPath(topicName, subscriptionName));
+        try {
+            remove(paths.subscriptionPath(topicName, subscriptionName));
+        } catch (Exception e) {
+            throw new InternalProcessingException(e);
+        }
     }
 
     @Override
     public void updateSubscription(Subscription modifiedSubscription) {
         ensureSubscriptionExists(modifiedSubscription.getTopicName(), modifiedSubscription.getName());
         logger.info("Updating subscription {}", modifiedSubscription.getQualifiedName());
-        overwrite(paths.subscriptionPath(modifiedSubscription), modifiedSubscription);
+        try {
+            overwrite(paths.subscriptionPath(modifiedSubscription), modifiedSubscription);
+        } catch (Exception e) {
+            throw new InternalProcessingException(e);
+        }
     }
 
     @Override
@@ -135,6 +140,14 @@ public class ZookeeperSubscriptionRepository extends ZookeeperBasedRepository im
                 .map(subscription -> getSubscriptionDetails(topicName, subscription, true))
                 .filter(Optional::isPresent)
                 .map(Optional::get)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Subscription> listAllSubscriptions() {
+        return topicRepository.listAllTopics().stream()
+                .map(topic -> listSubscriptions(topic.getName()))
+                .flatMap(Collection::stream)
                 .collect(Collectors.toList());
     }
 }

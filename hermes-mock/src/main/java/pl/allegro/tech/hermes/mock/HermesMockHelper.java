@@ -1,15 +1,11 @@
 package pl.allegro.tech.hermes.mock;
 
-import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
-import static com.github.tomakehurst.wiremock.client.WireMock.post;
-import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
-import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
-
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.matching.RequestPatternBuilder;
 import com.github.tomakehurst.wiremock.matching.StringValuePattern;
 import com.github.tomakehurst.wiremock.matching.ValueMatcher;
+import com.github.tomakehurst.wiremock.stubbing.StubMapping;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
 import org.apache.avro.AvroRuntimeException;
 import org.apache.avro.Schema;
@@ -27,6 +23,11 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.post;
+import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
+
 public class HermesMockHelper {
     private final WireMockServer wireMockServer;
     private final ObjectMapper objectMapper;
@@ -34,6 +35,17 @@ public class HermesMockHelper {
     public HermesMockHelper(WireMockServer wireMockServer, ObjectMapper objectMapper) {
         this.wireMockServer = wireMockServer;
         this.objectMapper = objectMapper;
+    }
+
+    private static Integer toIntMilliseconds(Duration duration) {
+        return Optional.ofNullable(duration)
+                .map(Duration::toMillis)
+                .map(Math::toIntExact)
+                .orElse(null);
+    }
+
+    public static StringValuePattern startsWith(String value) {
+        return new StartsWithPattern(value);
     }
 
     public <T> T deserializeJson(byte[] content, Class<T> clazz) {
@@ -74,8 +86,8 @@ public class HermesMockHelper {
         wireMockServer.verify(count, postRequestedFor(urlEqualTo("/topics/" + topicName)));
     }
 
-    public void addStub(String topicName, Response response, String contentType) {
-        wireMockServer.stubFor(post(urlEqualTo("/topics/" + topicName))
+    public StubMapping addStub(String topicName, Response response, String contentType) {
+        return wireMockServer.stubFor(post(urlEqualTo("/topics/" + topicName))
                 .withHeader("Content-Type", startsWith(contentType))
                 .willReturn(aResponse()
                         .withStatus(response.getStatusCode())
@@ -84,25 +96,21 @@ public class HermesMockHelper {
         );
     }
 
-    public void addStub(String topicName, Response response, String contentType, ValueMatcher<com.github.tomakehurst.wiremock.http.Request> valueMatcher) {
-        wireMockServer.stubFor(post(urlEqualTo("/topics/" + topicName))
+    public StubMapping addStub(String topicName, Response response, String contentType,
+                        ValueMatcher<com.github.tomakehurst.wiremock.http.Request> valueMatcher) {
+        return wireMockServer.stubFor(post(urlEqualTo("/topics/" + topicName))
                 .andMatching(valueMatcher)
                 .withHeader("Content-Type", startsWith(contentType))
                 .willReturn(aResponse()
                         .withStatus(response.getStatusCode())
                         .withHeader("Hermes-Message-Id", UUID.randomUUID().toString())
+                        .withFixedDelay(toIntMilliseconds(response.getFixedDelay()))
                 )
         );
     }
 
-    private static Integer toIntMilliseconds(Duration duration) {
-        return Optional.ofNullable(duration)
-                .map(Duration::toMillis)
-                .map(Math::toIntExact)
-                .orElse(null);
+    public void removeStubMapping(StubMapping stubMapping) {
+        wireMockServer.removeStubMapping(stubMapping);
     }
 
-    public static StringValuePattern startsWith(String value) {
-        return new StartsWithPattern(value);
-    }
 }

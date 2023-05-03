@@ -11,6 +11,7 @@ import pl.allegro.tech.hermes.management.domain.dc.MultiDatacenterRepositoryComm
 import pl.allegro.tech.hermes.management.domain.dc.RepositoryManager;
 import pl.allegro.tech.hermes.management.domain.subscription.SubscriptionMetricsRepository;
 import pl.allegro.tech.hermes.management.domain.subscription.SubscriptionOwnerCache;
+import pl.allegro.tech.hermes.management.domain.subscription.SubscriptionRemover;
 import pl.allegro.tech.hermes.management.domain.subscription.SubscriptionService;
 import pl.allegro.tech.hermes.management.domain.subscription.health.SubscriptionHealthChecker;
 import pl.allegro.tech.hermes.management.domain.subscription.health.SubscriptionHealthProblemIndicator;
@@ -46,7 +47,9 @@ public class SubscriptionHealthConfiguration {
     @Bean
     public SubscriptionHealthProblemIndicator unreachableIndicator() {
         if (subscriptionHealthProperties.isUnreachableIndicatorEnabled()) {
-            return new UnreachableIndicator(subscriptionHealthProperties.getMaxOtherErrorsRatio(), subscriptionHealthProperties.getMinSubscriptionRateForReliableMetrics());
+            return new UnreachableIndicator(
+                    subscriptionHealthProperties.getMaxOtherErrorsRatio(),
+                    subscriptionHealthProperties.getMinSubscriptionRateForReliableMetrics());
         }
         return DISABLED_INDICATOR;
     }
@@ -54,7 +57,9 @@ public class SubscriptionHealthConfiguration {
     @Bean
     public SubscriptionHealthProblemIndicator timingOutIndicator() {
         if (subscriptionHealthProperties.isTimingOutIndicatorEnabled()) {
-            return new TimingOutIndicator(subscriptionHealthProperties.getMaxTimeoutsRatio(), subscriptionHealthProperties.getMinSubscriptionRateForReliableMetrics());
+            return new TimingOutIndicator(
+                    subscriptionHealthProperties.getMaxTimeoutsRatio(),
+                    subscriptionHealthProperties.getMinSubscriptionRateForReliableMetrics());
         }
         return DISABLED_INDICATOR;
     }
@@ -62,7 +67,9 @@ public class SubscriptionHealthConfiguration {
     @Bean
     public SubscriptionHealthProblemIndicator malfunctioningIndicator() {
         if (subscriptionHealthProperties.isMalfunctioningIndicatorEnabled()) {
-            return new MalfunctioningIndicator(subscriptionHealthProperties.getMax5xxErrorsRatio(), subscriptionHealthProperties.getMinSubscriptionRateForReliableMetrics());
+            return new MalfunctioningIndicator(
+                    subscriptionHealthProperties.getMax5xxErrorsRatio(),
+                    subscriptionHealthProperties.getMinSubscriptionRateForReliableMetrics());
         }
         return DISABLED_INDICATOR;
     }
@@ -70,7 +77,9 @@ public class SubscriptionHealthConfiguration {
     @Bean
     public SubscriptionHealthProblemIndicator receivingMalformedMessagesIndicator() {
         if (subscriptionHealthProperties.isReceivingMalformedMessagesIndicatorEnabled()) {
-            return new ReceivingMalformedMessagesIndicator(subscriptionHealthProperties.getMax4xxErrorsRatio(), subscriptionHealthProperties.getMinSubscriptionRateForReliableMetrics());
+            return new ReceivingMalformedMessagesIndicator(
+                    subscriptionHealthProperties.getMax4xxErrorsRatio(),
+                    subscriptionHealthProperties.getMinSubscriptionRateForReliableMetrics());
         }
         return DISABLED_INDICATOR;
     }
@@ -87,7 +96,8 @@ public class SubscriptionHealthConfiguration {
                                                    MultiDatacenterRepositoryCommandExecutor multiDcExecutor,
                                                    MultiDCAwareService multiDCAwareService,
                                                    RepositoryManager repositoryManager,
-                                                   SubscriptionHealthProperties subscriptionHealthProperties) {
+                                                   SubscriptionHealthProperties subscriptionHealthProperties,
+                                                   SubscriptionRemover subscriptionRemover) {
         return new SubscriptionService(
                 subscriptionRepository,
                 subscriptionOwnerCache,
@@ -104,7 +114,16 @@ public class SubscriptionHealthConfiguration {
                         subscriptionHealthProperties.getThreads(),
                         new ThreadFactoryBuilder().setNameFormat("subscription-health-check-executor-%d").build()
                 ),
-                subscriptionHealthProperties.getTimeoutMillis()
+                subscriptionHealthProperties.getTimeoutMillis(),
+                subscriptionRemover
         );
+    }
+
+    @Bean
+    public SubscriptionRemover subscriptionRemover(Auditor auditor,
+                                                   MultiDatacenterRepositoryCommandExecutor multiDatacenterRepositoryCommandExecutor,
+                                                   SubscriptionOwnerCache subscriptionOwnerCache,
+                                                   SubscriptionRepository subscriptionRepository) {
+        return new SubscriptionRemover(auditor, multiDatacenterRepositoryCommandExecutor, subscriptionOwnerCache, subscriptionRepository);
     }
 }

@@ -5,7 +5,6 @@ import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.testcontainers.containers.PubSubEmulatorContainer;
 import org.testcontainers.lifecycle.Startable;
 import org.testng.ITestContext;
 import org.testng.ITestNGMethod;
@@ -13,11 +12,12 @@ import org.testng.annotations.AfterSuite;
 import org.testng.annotations.BeforeSuite;
 import org.testng.annotations.Listeners;
 import org.testng.annotations.Test;
-import pl.allegro.tech.hermes.common.config.Configs;
+import pl.allegro.tech.hermes.consumers.ConsumerConfigurationProperties;
+import pl.allegro.tech.hermes.frontend.FrontendConfigurationProperties;
 import pl.allegro.tech.hermes.integration.setup.HermesManagementInstance;
 import pl.allegro.tech.hermes.test.helper.containers.ConfluentSchemaRegistryContainer;
-import pl.allegro.tech.hermes.test.helper.containers.KafkaContainerCluster;
 import pl.allegro.tech.hermes.test.helper.containers.GooglePubSubContainer;
+import pl.allegro.tech.hermes.test.helper.containers.KafkaContainerCluster;
 import pl.allegro.tech.hermes.test.helper.containers.ZookeeperContainer;
 import pl.allegro.tech.hermes.test.helper.environment.Starter;
 import pl.allegro.tech.hermes.test.helper.environment.WireMockStarter;
@@ -30,7 +30,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.stream.Stream;
 
-import static pl.allegro.tech.hermes.management.infrastructure.dc.DefaultDatacenterNameProvider.DEFAULT_DC_NAME;
+import static pl.allegro.tech.hermes.consumers.ConsumerConfigurationProperties.GOOGLE_PUBSUB_TRANSPORT_CHANNEL_PROVIDER_ADDRESS;
+import static pl.allegro.tech.hermes.infrastructure.dc.DefaultDatacenterNameProvider.DEFAULT_DC_NAME;
 
 @Listeners({RetryListener.class})
 public class HermesIntegrationEnvironment implements EnvironmentAware {
@@ -45,7 +46,7 @@ public class HermesIntegrationEnvironment implements EnvironmentAware {
 
     public static final KafkaContainerCluster kafkaClusterOne = new KafkaContainerCluster(NUMBER_OF_BROKERS_PER_CLUSTER);
     public static final KafkaContainerCluster kafkaClusterTwo = new KafkaContainerCluster(NUMBER_OF_BROKERS_PER_CLUSTER);
-    public static final ZookeeperContainer hermesZookeeperOne = new ZookeeperContainer();
+    public static final ZookeeperContainer hermesZookeeperOne = new ZookeeperContainer("ZookeeperContainerOne");
     public static final ZookeeperContainer hermesZookeeperTwo = new ZookeeperContainer();
     public static final GooglePubSubContainer googlePubSubEmulator = new GooglePubSubContainer();
     public static final ConfluentSchemaRegistryContainer schemaRegistry = new ConfluentSchemaRegistryContainer()
@@ -56,7 +57,10 @@ public class HermesIntegrationEnvironment implements EnvironmentAware {
     static {
         // set properties before any other test initialization
         System.setProperty("zookeeper.sasl.client", "false");
-        System.setProperty("java.security.auth.login.config", HermesIntegrationEnvironment.class.getClassLoader().getResource("kafka_server_jaas.conf").getPath());
+        System.setProperty(
+                "java.security.auth.login.config",
+                HermesIntegrationEnvironment.class.getClassLoader().getResource("kafka_server_jaas.conf").getPath()
+        );
     }
 
     static {
@@ -69,7 +73,7 @@ public class HermesIntegrationEnvironment implements EnvironmentAware {
     }
 
     @BeforeSuite
-    public void prepareEnvironment(ITestContext context) throws Exception {
+    public void prepareEnvironment(ITestContext context) {
         try {
             Stream.of(kafkaClusterOne, kafkaClusterTwo, hermesZookeeperOne, hermesZookeeperTwo, googlePubSubEmulator)
                     .parallel()
@@ -89,23 +93,34 @@ public class HermesIntegrationEnvironment implements EnvironmentAware {
                     .replicationFactor(kafkaClusterOne.getAllBrokers().size())
                     .uncleanLeaderElectionEnabled(false)
                     .start();
+            // Since we don't start a management instance for DC2 we need to create the root path manually.
+            initializeRootPathInZookeeperTwo();
 
-            zookeeper = startZookeeperClient();
+            zookeeper = startZookeeperClient(hermesZookeeperOne.getConnectionString());
 
             ConsumersStarter consumersStarter = new ConsumersStarter();
-            consumersStarter.overrideProperty(Configs.KAFKA_AUTHORIZATION_ENABLED, false);
-            consumersStarter.overrideProperty(Configs.KAFKA_CLUSTER_NAME, PRIMARY_KAFKA_CLUSTER_NAME);
-            consumersStarter.overrideProperty(Configs.KAFKA_BROKER_LIST, kafkaClusterOne.getBootstrapServersForExternalClients());
-            consumersStarter.overrideProperty(Configs.ZOOKEEPER_CONNECT_STRING, hermesZookeeperOne.getConnectionString());
-            consumersStarter.overrideProperty(Configs.SCHEMA_REPOSITORY_SERVER_URL, schemaRegistry.getUrl());
-            consumersStarter.overrideProperty(Configs.GOOGLE_PUBSUB_TRANSPORT_CHANNEL_PROVIDER_ADDRESS, googlePubSubEmulator.getEmulatorEndpoint());
+            consumersStarter.overrideProperty(ConsumerConfigurationProperties.KAFKA_AUTHORIZATION_ENABLED, false);
+            consumersStarter.overrideProperty(ConsumerConfigurationProperties.KAFKA_CLUSTER_NAME, PRIMARY_KAFKA_CLUSTER_NAME);
+            consumersStarter.overrideProperty(
+                    ConsumerConfigurationProperties.KAFKA_BROKER_LIST, kafkaClusterOne.getBootstrapServersForExternalClients()
+            );
+            consumersStarter.overrideProperty(
+                    ConsumerConfigurationProperties.ZOOKEEPER_CONNECTION_STRING, hermesZookeeperOne.getConnectionString()
+            );
+            consumersStarter.overrideProperty(ConsumerConfigurationProperties.SCHEMA_REPOSITORY_SERVER_URL, schemaRegistry.getUrl());
+            consumersStarter.overrideProperty(GOOGLE_PUBSUB_TRANSPORT_CHANNEL_PROVIDER_ADDRESS, googlePubSubEmulator.getEmulatorEndpoint());
             consumersStarter.start();
 
-            FrontendStarter frontendStarter = new FrontendStarter(FRONTEND_PORT);
-            frontendStarter.overrideProperty(Configs.KAFKA_AUTHORIZATION_ENABLED, false);
-            frontendStarter.overrideProperty(Configs.KAFKA_BROKER_LIST, kafkaClusterOne.getBootstrapServersForExternalClients());
-            frontendStarter.overrideProperty(Configs.ZOOKEEPER_CONNECT_STRING, hermesZookeeperOne.getConnectionString());
-            frontendStarter.overrideProperty(Configs.SCHEMA_REPOSITORY_SERVER_URL, schemaRegistry.getUrl());
+            FrontendStarter frontendStarter = FrontendStarter.withCommonIntegrationTestConfig(FRONTEND_PORT);
+            frontendStarter.overrideProperty(
+                    FrontendConfigurationProperties.KAFKA_BROKER_LIST, kafkaClusterOne.getBootstrapServersForExternalClients()
+            );
+            frontendStarter.overrideProperty(
+                    FrontendConfigurationProperties.ZOOKEEPER_CONNECTION_STRING, hermesZookeeperOne.getConnectionString()
+            );
+            frontendStarter.overrideProperty(FrontendConfigurationProperties.SCHEMA_REPOSITORY_SERVER_URL, schemaRegistry.getUrl());
+            frontendStarter.overrideProperty(FrontendConfigurationProperties.METRICS_GRAPHITE_REPORTER_ENABLED, true);
+            frontendStarter.overrideProperty(FrontendConfigurationProperties.GRAPHITE_PORT, 18023);
             frontendStarter.start();
 
             for (ITestNGMethod method : context.getAllTestMethods()) {
@@ -119,13 +134,19 @@ public class HermesIntegrationEnvironment implements EnvironmentAware {
         }
     }
 
-    private CuratorFramework startZookeeperClient() throws InterruptedException {
+    private CuratorFramework startZookeeperClient(String connectString) {
         final CuratorFramework zookeeperClient = CuratorFrameworkFactory.builder()
-                .connectString(hermesZookeeperOne.getConnectionString())
+                .connectString(connectString)
                 .retryPolicy(new ExponentialBackoffRetry(1000, 3))
                 .build();
         zookeeperClient.start();
         return zookeeperClient;
+    }
+
+    private void initializeRootPathInZookeeperTwo() throws Exception {
+        try (CuratorFramework curatorFramework = startZookeeperClient(hermesZookeeperTwo.getConnectionString())) {
+            curatorFramework.create().creatingParentsIfNeeded().forPath("/hermes/groups");
+        }
     }
 
     @AfterSuite(alwaysRun = true)

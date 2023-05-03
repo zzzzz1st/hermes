@@ -4,6 +4,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import org.assertj.core.api.Assertions;
 import org.testng.annotations.Test;
+import pl.allegro.tech.hermes.api.BlacklistStatus;
 import pl.allegro.tech.hermes.api.ContentType;
 import pl.allegro.tech.hermes.api.ErrorCode;
 import pl.allegro.tech.hermes.api.ErrorDescription;
@@ -11,20 +12,22 @@ import pl.allegro.tech.hermes.api.Group;
 import pl.allegro.tech.hermes.api.PatchData;
 import pl.allegro.tech.hermes.api.Topic;
 import pl.allegro.tech.hermes.api.TopicLabel;
-import pl.allegro.tech.hermes.api.BlacklistStatus;
+import pl.allegro.tech.hermes.api.TopicWithSchema;
 import pl.allegro.tech.hermes.integration.IntegrationTest;
 import pl.allegro.tech.hermes.integration.shame.Unreliable;
 import pl.allegro.tech.hermes.test.helper.avro.AvroUserSchemaLoader;
 import pl.allegro.tech.hermes.test.helper.builder.TopicBuilder;
 
-import javax.ws.rs.core.Response;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
+import javax.ws.rs.BadRequestException;
+import javax.ws.rs.core.Response;
 
 import static javax.ws.rs.core.Response.Status.BAD_REQUEST;
 import static javax.ws.rs.core.Response.Status.CREATED;
 import static javax.ws.rs.core.Response.Status.OK;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static pl.allegro.tech.hermes.api.ContentType.AVRO;
 import static pl.allegro.tech.hermes.api.ContentType.JSON;
 import static pl.allegro.tech.hermes.api.PatchData.patchData;
@@ -155,7 +158,9 @@ public class TopicManagementTest extends IntegrationTest {
         // then
         assertThat(response).hasStatus(Response.Status.OK);
         Assertions.assertThat(management.topic().list("removeTopicGroup", false)).isEmpty();
-        Assertions.assertThat(management.blacklist().isTopicBlacklisted("removeTopicGroup.blacklistedTopic")).isEqualTo(BlacklistStatus.NOT_BLACKLISTED);
+        Assertions.assertThat(
+                management.blacklist().isTopicBlacklisted("removeTopicGroup.blacklistedTopic")).isEqualTo(BlacklistStatus.NOT_BLACKLISTED
+        );
     }
 
     @Test
@@ -169,6 +174,27 @@ public class TopicManagementTest extends IntegrationTest {
 
         // then
         assertThat(response).hasStatus(Response.Status.FORBIDDEN).hasErrorCode(ErrorCode.TOPIC_NOT_EMPTY);
+    }
+
+    @Test
+    public void shouldRemoveTopicWithRelatedSubscriptionsWhenAutoRemoveEnabled() {
+        // given
+        Topic topic = operations.buildTopic("removeNonemptyTopicGroup", "topic");
+        operations.createSubscription(
+                topic,
+                subscription(topic, "subscription")
+                        .withAutoDeleteWithTopicEnabled(true)
+                        .build());
+
+        // when
+        Response response = management.topic().remove("removeNonemptyTopicGroup.topic");
+
+        // then
+        assertThat(response).hasStatus(Response.Status.OK);
+
+        // and
+        Throwable thrown = catchThrowable(() -> management.subscription().get(topic.getQualifiedName(), "subscription"));
+        assertThat(thrown).isInstanceOf(BadRequestException.class);
     }
 
     @Test(enabled = false)
@@ -202,6 +228,24 @@ public class TopicManagementTest extends IntegrationTest {
         // then
         assertThat(response).hasStatus(Response.Status.BAD_REQUEST).hasErrorCode(ErrorCode.VALIDATION_ERROR);
         Assertions.assertThat(management.topic().list("invalidTopicGroup", false)).isEmpty();
+    }
+
+    @Test
+    public void shouldNotCreateTopicWithMissingGroup() {
+        // given no group
+
+        // when
+        TopicWithSchema topicWithSchema = topicWithSchema(topic("nonExistingGroup", "topic")
+                .withContentType(AVRO)
+                .withTrackingEnabled(false).build(), SCHEMA);
+        Response createTopicResponse = operations.createTopicResponse(topicWithSchema);
+        Response schemaResponse = operations.getSchemaResponse(topicWithSchema);
+
+        // then
+        assertThat(createTopicResponse).hasStatus(Response.Status.NOT_FOUND).hasErrorCode(ErrorCode.GROUP_NOT_EXISTS);
+
+        // and
+        assertThat(schemaResponse).hasStatus(Response.Status.NO_CONTENT);
     }
 
     @Test
@@ -408,7 +452,7 @@ public class TopicManagementTest extends IntegrationTest {
     public void shouldCreateTopicWithMaxMessageSize() {
         // given
         Topic topic = TopicBuilder.topic("messageSize", "topic").withMaxMessageSize(2048).build();
-        assertThat(management.group().create(new Group(topic.getName().getGroupName(), "a"))).hasStatus(CREATED);
+        assertThat(management.group().create(new Group(topic.getName().getGroupName()))).hasStatus(CREATED);
 
         // when
         Response response = management.topic().create(topicWithSchema(topic));
@@ -436,7 +480,7 @@ public class TopicManagementTest extends IntegrationTest {
     public void shouldCreateTopicWithRestrictedSubscribing() {
         // given
         Topic topic = TopicBuilder.topic("restricted", "topic").withSubscribingRestricted().build();
-        assertThat(management.group().create(new Group(topic.getName().getGroupName(), "topic"))).hasStatus(CREATED);
+        assertThat(management.group().create(new Group(topic.getName().getGroupName()))).hasStatus(CREATED);
 
         // when
         Response response = management.topic().create(topicWithSchema(topic));

@@ -21,6 +21,27 @@ subscriptions.controller('SubscriptionController', ['SubscriptionRepository', 'S
         var subscriptionName = $scope.subscriptionName = $stateParams.subscriptionName;
         $scope.config = config;
 
+        function getUndelivered() {
+            subscriptionRepository.undelivered(topicName, subscriptionName).$promise
+                .then(function (undelivered) {
+                    $scope.undelivered = undelivered;
+                })
+                .catch(function () {
+                    $scope.undelivered = [];
+                });
+        }
+
+        function getLastUndelivered() {
+            subscriptionRepository.lastUndelivered(topicName, subscriptionName).$promise
+                .then(function (lastUndelivered) {
+                    $scope.lastUndelivered = lastUndelivered;
+                })
+                .catch(function () {
+                    $scope.lastUndelivered = null;
+                });
+        }
+
+
         subscriptionRepository.get(topicName, subscriptionName).$promise
                 .then(function(subscription) {
                     $scope.subscription = subscription;
@@ -57,21 +78,13 @@ subscriptions.controller('SubscriptionController', ['SubscriptionRepository', 'S
             $scope.health = health;
         });
 
-        subscriptionRepository.lastUndelivered(topicName, subscriptionName).$promise
-                .then(function (lastUndelivered) {
-                    $scope.lastUndelivered = lastUndelivered;
-                })
-                .catch(function () {
-                    $scope.lastUndelivered = null;
-                });
-
-        subscriptionRepository.undelivered(topicName, subscriptionName).$promise
-            .then(function (undelivered) {
-                $scope.undelivered = undelivered;
-            })
-            .catch(function () {
-                $scope.undelivered = [];
-            });
+        $scope.$watch('userHasSufficientPrivileges', function (currentValue) {
+            // user has privileges to see undelivered messages
+            if (currentValue === true) {
+                getUndelivered();
+                getLastUndelivered();
+            }
+        });
 
         $scope.notSupportedEndpointAddressResolverMetadataEntries = function(metadataEntries) {
           var filtered = {};
@@ -159,6 +172,7 @@ subscriptions.controller('SubscriptionController', ['SubscriptionRepository', 'S
                 passwordLabel: 'Root password',
                 passwordHint: 'root password'
             }).result.then(function (result) {
+                $scope.disableRemoveButton = true;
                 passwordService.setRoot(result.password);
                 subscriptionRepository.remove(topicName, $scope.subscription.name).$promise
                         .then(function () {
@@ -170,6 +184,7 @@ subscriptions.controller('SubscriptionController', ['SubscriptionRepository', 'S
                         })
                         .finally(function () {
                             passwordService.reset();
+                            $scope.disableRemoveButton = false;
                         });
             });
         };
@@ -243,6 +258,7 @@ subscriptions.controller('SubscriptionController', ['SubscriptionRepository', 'S
             confirmationModal.open({
                 action: 'Retransmit',
                 actionSubject: 'Subscription ' + $scope.subscription.name,
+                additionalInfo: "This action re-send all messages starting from given date. Do you want to continue?",
                 passwordLabel: 'Root password',
                 passwordHint: 'root password'
             }).result.then(function (result) {
@@ -259,7 +275,31 @@ subscriptions.controller('SubscriptionController', ['SubscriptionRepository', 'S
                         });
                 });
         };
+        $scope.skipMessages = function (){
+            tommorowDate = new Date()
+            tommorowDate.setDate(tommorowDate.getDate() + 1)
 
+            confirmationModal.open({
+                action: 'Skip messages',
+                actionSubject: 'Subscription ' + $scope.subscription.name,
+                additionalInfo: "This action will skip all undelivered messages for this subscription. Do you want to continue?",
+                passwordLabel: 'Root password',
+                passwordHint: 'root password'
+            }).result.then(function (result) {
+                passwordService.setRoot(result.password);
+                $scope.skipMessagesLoading = true;
+                subscriptionRepository.retransmit(topicName, $scope.subscription.name, tommorowDate.toISOString()).$promise
+                    .then(function () {
+                        toaster.pop('success', 'Success', 'Skipped messages.');
+                        $scope.skipMessagesLoading = false;
+                    })
+                    .catch(function (response) {
+                        toaster.pop('error', 'Error ' + response.status, response.data.message);
+                        $scope.skipMessagesLoading = false;
+                    });
+            });
+
+        }
         $scope.debugFilters = function () {
             filtersDebuggerModal.open(topicName, $scope.subscription.filters, $scope.topicContentType)
                 .then(function (result) {

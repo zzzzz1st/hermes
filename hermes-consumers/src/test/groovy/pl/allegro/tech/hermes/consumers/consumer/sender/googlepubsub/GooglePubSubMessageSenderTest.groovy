@@ -1,6 +1,5 @@
 package pl.allegro.tech.hermes.consumers.consumer.sender.googlepubsub
 
-
 import com.google.api.core.SettableApiFuture
 import com.google.api.gax.grpc.GrpcStatusCode
 import com.google.api.gax.rpc.ApiException
@@ -8,12 +7,12 @@ import com.google.cloud.pubsub.v1.Publisher
 import com.google.pubsub.v1.PubsubMessage
 import com.google.pubsub.v1.TopicName
 import io.grpc.Status
-import pl.allegro.tech.hermes.common.config.ConfigFactory
 import pl.allegro.tech.hermes.consumers.consumer.sender.MessageSendingResult
 import pl.allegro.tech.hermes.consumers.test.MessageBuilder
 import spock.lang.Specification
 import spock.lang.Subject
 
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
 class GooglePubSubMessageSenderTest extends Specification {
@@ -21,12 +20,12 @@ class GooglePubSubMessageSenderTest extends Specification {
     Publisher publisher = Mock(Publisher)
 
     GooglePubSubSenderTarget senderTarget = GooglePubSubSenderTarget.builder()
-        .withTopicName(TopicName.of("test-project", "topic-name"))
-        .build()
+            .withTopicName(TopicName.of("test-project", "topic-name"))
+            .build()
 
     GooglePubSubClientsPool clientsPool = Mock(GooglePubSubClientsPool)
 
-    GooglePubSubClient client = new GooglePubSubClient(publisher, new GooglePubSubMessages(
+    GooglePubSubClient client = new GooglePubSubClient(publisher, new GooglePubSubMessageTransformerRaw(
             new GooglePubSubMetadataAppender()))
 
     @Subject
@@ -42,8 +41,9 @@ class GooglePubSubMessageSenderTest extends Specification {
         publisher.publish(_ as PubsubMessage) >> apiFuture("test")
 
         when:
-        MessageSendingResult result = sender.send(MessageBuilder.testMessage())
-                .get(1, TimeUnit.SECONDS)
+        CompletableFuture<MessageSendingResult> future = new CompletableFuture();
+        sender.send(MessageBuilder.testMessage(), future)
+        MessageSendingResult result = future.get(1, TimeUnit.SECONDS)
 
         then:
         result.succeeded()
@@ -55,8 +55,9 @@ class GooglePubSubMessageSenderTest extends Specification {
         publisher.publish(_ as PubsubMessage) >> apiFuture(exception)
 
         when:
-        MessageSendingResult result = sender.send(MessageBuilder.testMessage())
-                .get(1, TimeUnit.SECONDS)
+        CompletableFuture<MessageSendingResult> future = new CompletableFuture();
+        sender.send(MessageBuilder.testMessage(), future)
+        MessageSendingResult result = future.get(1, TimeUnit.SECONDS)
 
         then:
         !result.succeeded()

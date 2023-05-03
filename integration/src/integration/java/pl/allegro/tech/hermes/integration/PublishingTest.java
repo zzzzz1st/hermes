@@ -11,7 +11,7 @@ import pl.allegro.tech.hermes.api.SubscriptionMode;
 import pl.allegro.tech.hermes.api.SubscriptionPolicy;
 import pl.allegro.tech.hermes.api.Topic;
 import pl.allegro.tech.hermes.api.TopicName;
-import pl.allegro.tech.hermes.common.config.Configs;
+import pl.allegro.tech.hermes.consumers.config.ZookeeperProperties;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperPaths;
 import pl.allegro.tech.hermes.integration.client.SlowClient;
 import pl.allegro.tech.hermes.integration.env.SharedServices;
@@ -21,16 +21,15 @@ import pl.allegro.tech.hermes.test.helper.builder.SubscriptionBuilder;
 import pl.allegro.tech.hermes.test.helper.endpoint.RemoteServiceEndpoint;
 import pl.allegro.tech.hermes.test.helper.message.TestMessage;
 
+import java.io.IOException;
+import java.net.SocketTimeoutException;
+import java.util.UUID;
 import javax.ws.rs.client.ClientBuilder;
 import javax.ws.rs.client.Entity;
 import javax.ws.rs.client.Invocation;
 import javax.ws.rs.client.WebTarget;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
-import java.io.IOException;
-import java.io.UnsupportedEncodingException;
-import java.net.SocketTimeoutException;
-import java.util.UUID;
 
 import static javax.ws.rs.client.ClientBuilder.newClient;
 import static javax.ws.rs.core.Response.Status.BAD_REQUEST;
@@ -56,7 +55,7 @@ public class PublishingTest extends IntegrationTest {
     public void shouldPublishAndConsumeMessage() {
         // given
         Topic topic = operations.buildTopic(randomTopic("publishAndConsumeGroup", "topic").build());
-        operations.createSubscription(topic, "subscription",remoteService.getUrl());
+        operations.createSubscription(topic, "subscription", remoteService.getUrl());
 
         TestMessage message = TestMessage.of("hello", "world");
         remoteService.expectMessages(message.body());
@@ -233,7 +232,7 @@ public class PublishingTest extends IntegrationTest {
     }
 
     @Test
-    public void shouldPublishMessageUsingChunkedEncoding() throws UnsupportedEncodingException {
+    public void shouldPublishMessageUsingChunkedEncoding() {
         // given
         Topic topic = operations.buildTopic(randomTopic("chunked", "topic").build());
 
@@ -249,6 +248,7 @@ public class PublishingTest extends IntegrationTest {
     @Test
     public void shouldNotCreateTopicWhenPublishingToNonExistingTopic() throws Exception {
         // given
+        ZookeeperProperties zookeeperProperties = new ZookeeperProperties();
         TopicName nonExisting = TopicName.fromQualifiedName("nonExistingGroup.nonExistingTopic8326");
 
         // when
@@ -257,7 +257,7 @@ public class PublishingTest extends IntegrationTest {
         // then
         assertThat(responseForNonExisting.getStatus()).isEqualTo(404);
 
-        ZookeeperPaths paths = new ZookeeperPaths(Configs.ZOOKEEPER_ROOT.getDefaultValue().toString());
+        ZookeeperPaths paths = new ZookeeperPaths(zookeeperProperties.getRoot());
         assertThat(SharedServices.services().zookeeper().checkExists().forPath(paths.topicPath(nonExisting))).isNull();
     }
 
@@ -367,7 +367,10 @@ public class PublishingTest extends IntegrationTest {
 
         // then
         assertThat(response).hasStatus(Response.Status.CREATED);
-        assertThat(remoteService.waitAndGetLastRequest()).hasHeaderValue("MY-HEADER", "myHeader123");
+        remoteService.waitUntilRequestReceived(request -> {
+            assertThat(request).hasHeaderValue("MY-HEADER", "myHeader123");
+            assertThat(request.getHeader("Hermes-Message-Id")).isNotEmpty();
+        });
     }
 
     @Test

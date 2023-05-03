@@ -10,7 +10,6 @@ import pl.allegro.tech.hermes.frontend.metric.CachedTopic;
 import pl.allegro.tech.hermes.frontend.producer.BrokerMessageProducer;
 
 import java.time.Duration;
-import java.time.temporal.ChronoUnit;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -31,7 +30,7 @@ class TopicMetadataLoader implements AutoCloseable {
 
     TopicMetadataLoader(BrokerMessageProducer brokerMessageProducer,
                                int retryCount,
-                               long retryInterval,
+                               Duration retryInterval,
                                int threadPoolSize) {
 
         this.brokerMessageProducer = brokerMessageProducer;
@@ -39,7 +38,7 @@ class TopicMetadataLoader implements AutoCloseable {
         this.scheduler = Executors.newScheduledThreadPool(threadPoolSize, threadFactory);
         this.retryPolicy = new RetryPolicy<MetadataLoadingResult>()
                 .withMaxRetries(retryCount)
-                .withDelay(Duration.of(retryInterval, ChronoUnit.MILLIS))
+                .withDelay(retryInterval)
                 .handleIf((resp, cause) -> resp.isFailure());
     }
 

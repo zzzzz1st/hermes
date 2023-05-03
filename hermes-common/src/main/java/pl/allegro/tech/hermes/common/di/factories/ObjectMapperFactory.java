@@ -6,23 +6,16 @@ import com.fasterxml.jackson.databind.InjectableValues;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import org.glassfish.hk2.api.Factory;
 import pl.allegro.tech.hermes.api.Topic;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
-import pl.allegro.tech.hermes.common.config.Configs;
 
-import javax.inject.Inject;
+public class ObjectMapperFactory {
 
-public class ObjectMapperFactory implements Factory<ObjectMapper> {
+    private final boolean schemaIdSerializationEnabled;
 
-    private final ConfigFactory configFactory;
-
-    @Inject
-    public ObjectMapperFactory(ConfigFactory configFactory) {
-        this.configFactory = configFactory;
+    public ObjectMapperFactory(boolean schemaIdSerializationEnabled) {
+        this.schemaIdSerializationEnabled = schemaIdSerializationEnabled;
     }
 
-    @Override
     public ObjectMapper provide() {
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
@@ -31,14 +24,9 @@ public class ObjectMapperFactory implements Factory<ObjectMapper> {
         objectMapper.registerModule(new JavaTimeModule());
 
         final InjectableValues defaultSchemaIdAwareSerializationEnabled = new InjectableValues
-                .Std().addValue(Topic.DEFAULT_SCHEMA_ID_SERIALIZATION_ENABLED_KEY, configFactory.getBooleanProperty(Configs.SCHEMA_ID_SERIALIZATION_ENABLED));
+                .Std().addValue(Topic.DEFAULT_SCHEMA_ID_SERIALIZATION_ENABLED_KEY, schemaIdSerializationEnabled);
         objectMapper.setInjectableValues(defaultSchemaIdAwareSerializationEnabled);
 
         return objectMapper;
-    }
-
-    @Override
-    public void dispose(ObjectMapper instance) {
-
     }
 }

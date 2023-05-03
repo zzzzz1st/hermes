@@ -1,6 +1,22 @@
 package pl.allegro.tech.hermes.test.helper.builder;
 
-import pl.allegro.tech.hermes.api.*;
+import pl.allegro.tech.hermes.api.BatchSubscriptionPolicy;
+import pl.allegro.tech.hermes.api.ContentType;
+import pl.allegro.tech.hermes.api.DeliveryType;
+import pl.allegro.tech.hermes.api.EndpointAddress;
+import pl.allegro.tech.hermes.api.EndpointAddressResolverMetadata;
+import pl.allegro.tech.hermes.api.Header;
+import pl.allegro.tech.hermes.api.MessageFilterSpecification;
+import pl.allegro.tech.hermes.api.MonitoringDetails;
+import pl.allegro.tech.hermes.api.OwnerId;
+import pl.allegro.tech.hermes.api.Subscription;
+import pl.allegro.tech.hermes.api.SubscriptionMode;
+import pl.allegro.tech.hermes.api.SubscriptionName;
+import pl.allegro.tech.hermes.api.SubscriptionOAuthPolicy;
+import pl.allegro.tech.hermes.api.SubscriptionPolicy;
+import pl.allegro.tech.hermes.api.Topic;
+import pl.allegro.tech.hermes.api.TopicName;
+import pl.allegro.tech.hermes.api.TrackingMode;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -20,7 +36,7 @@ public class SubscriptionBuilder {
 
     private String description = "description";
 
-    private SubscriptionPolicy serialSubscriptionPolicy = new SubscriptionPolicy(100, 10, 1000, 1000, false, 100, 100, 0, 1, 600);
+    private SubscriptionPolicy serialSubscriptionPolicy = new SubscriptionPolicy(100, 10, 1000, 1000, false, 100, null, 0, 1, 600);
 
     private BatchSubscriptionPolicy batchSubscriptionPolicy;
 
@@ -31,8 +47,6 @@ public class SubscriptionBuilder {
     private boolean http2Enabled = false;
 
     private OwnerId owner = new OwnerId("Plaintext", "some team");
-
-    private String supportTeam = "team";
 
     private MonitoringDetails monitoringDetails = MonitoringDetails.EMPTY;
 
@@ -48,6 +62,8 @@ public class SubscriptionBuilder {
     private SubscriptionOAuthPolicy oAuthPolicy;
 
     private boolean attachingIdentityHeadersEnabled = false;
+
+    private boolean autoDeleteWithTopicEnabled = false;
 
     private SubscriptionBuilder(TopicName topicName, String subscriptionName, EndpointAddress endpoint) {
         this.topicName = topicName;
@@ -97,15 +113,17 @@ public class SubscriptionBuilder {
             return Subscription.createSerialSubscription(
                     topicName, name, endpoint, state, description,
                     serialSubscriptionPolicy, trackingEnabled,
-                    trackingMode, owner, supportTeam, monitoringDetails, contentType,
-                    filters, mode, headers, metadata, oAuthPolicy, http2Enabled, attachingIdentityHeadersEnabled
+                    trackingMode, owner, monitoringDetails, contentType,
+                    filters, mode, headers, metadata, oAuthPolicy, http2Enabled,
+                    attachingIdentityHeadersEnabled, autoDeleteWithTopicEnabled
             );
         } else {
             return Subscription.createBatchSubscription(
                     topicName, name, endpoint, state, description,
                     batchSubscriptionPolicy, trackingEnabled,
-                    trackingMode, owner, supportTeam, monitoringDetails, contentType,
-                    filters, headers, metadata, oAuthPolicy, http2Enabled, attachingIdentityHeadersEnabled
+                    trackingMode, owner, monitoringDetails, contentType,
+                    filters, headers, metadata, oAuthPolicy, http2Enabled,
+                    attachingIdentityHeadersEnabled, autoDeleteWithTopicEnabled
             );
         }
     }
@@ -171,12 +189,6 @@ public class SubscriptionBuilder {
         return this;
     }
 
-    @Deprecated
-    public SubscriptionBuilder withSupportTeam(String supportTeam) {
-        this.supportTeam = supportTeam;
-        return this;
-    }
-
     public SubscriptionBuilder withMonitoringDetails(MonitoringDetails monitoringDetails) {
         this.monitoringDetails = monitoringDetails;
         return this;
@@ -219,6 +231,11 @@ public class SubscriptionBuilder {
 
     public SubscriptionBuilder withAttachingIdentityHeadersEnabled(boolean attachingIdentityHeadersEnabled) {
         this.attachingIdentityHeadersEnabled = attachingIdentityHeadersEnabled;
+        return this;
+    }
+
+    public SubscriptionBuilder withAutoDeleteWithTopicEnabled(boolean autoDeleteWithTopicEnabled) {
+        this.autoDeleteWithTopicEnabled = autoDeleteWithTopicEnabled;
         return this;
     }
 }

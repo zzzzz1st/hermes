@@ -1,10 +1,10 @@
 package pl.allegro.tech.hermes.domain.subscription;
 
-import java.util.Collection;
 import pl.allegro.tech.hermes.api.Subscription;
 import pl.allegro.tech.hermes.api.SubscriptionName;
 import pl.allegro.tech.hermes.api.TopicName;
 
+import java.util.Collection;
 import java.util.List;
 
 public interface SubscriptionRepository {
@@ -30,4 +30,6 @@ public interface SubscriptionRepository {
     List<String> listSubscriptionNames(TopicName topicName);
 
     List<Subscription> listSubscriptions(TopicName topicName);
+
+    List<Subscription> listAllSubscriptions();
 }

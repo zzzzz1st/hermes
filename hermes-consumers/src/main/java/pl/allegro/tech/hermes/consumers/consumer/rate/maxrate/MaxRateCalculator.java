@@ -44,12 +44,9 @@ class MaxRateCalculator {
 
     void calculate() {
         try {
-            if (!clusterAssignmentCache.isReady()) {
-                return;
-            }
             logger.info("Max rate calculation started");
 
-            long start = clock.millis();
+            final long start = clock.millis();
             maxRateRegistry.onBeforeMaxRateCalculation();
 
             clusterAssignmentCache.getSubscriptionConsumers().forEach((subscriptionName, consumerIds) -> {
@@ -64,8 +61,7 @@ class MaxRateCalculator {
                                 = balancer.balance(subscription.getSerialSubscriptionPolicy().getRate(), rateInfos);
 
                         newRates.ifPresent(rates -> {
-                            logger.info("Calculated new max rates for {}: {}",
-                                    subscription.getQualifiedName(), rates);
+                            logger.debug("Calculated new max rates for {}: {}", subscription.getQualifiedName(), rates);
 
                             maxRateRegistry.update(subscription.getQualifiedName(), rates);
                         });

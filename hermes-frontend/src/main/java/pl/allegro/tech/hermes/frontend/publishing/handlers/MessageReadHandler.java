@@ -6,13 +6,11 @@ import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
-import pl.allegro.tech.hermes.common.config.Configs;
-import pl.allegro.tech.hermes.common.metric.timer.StartedTimersPair;
 import pl.allegro.tech.hermes.frontend.publishing.handlers.end.MessageErrorProcessor;
 import pl.allegro.tech.hermes.frontend.publishing.message.MessageState;
 
 import java.io.ByteArrayOutputStream;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -29,32 +27,33 @@ class MessageReadHandler implements HttpHandler {
     private final HttpHandler timeoutHandler;
     private final MessageErrorProcessor messageErrorProcessor;
     private final ContentLengthChecker contentLengthChecker;
-    private final int defaultAsyncTimeout;
-    private final int longAsyncTimeout;
+    private final Duration defaultAsyncTimeout;
+    private final Duration longAsyncTimeout;
     private final ThroughputLimiter throughputLimiter;
 
-    MessageReadHandler(HttpHandler next, HttpHandler timeoutHandler, ConfigFactory configFactory,
-                       MessageErrorProcessor messageErrorProcessor,  ThroughputLimiter throughputLimiter) {
+    MessageReadHandler(HttpHandler next, HttpHandler timeoutHandler,
+                       MessageErrorProcessor messageErrorProcessor, ThroughputLimiter throughputLimiter,
+                       boolean forceMaxMessageSizePerTopic, Duration idleTime, Duration longIdleTime) {
         this.next = next;
         this.timeoutHandler = timeoutHandler;
         this.messageErrorProcessor = messageErrorProcessor;
-        this.contentLengthChecker = new ContentLengthChecker(configFactory);
-        this.defaultAsyncTimeout = configFactory.getIntProperty(Configs.FRONTEND_IDLE_TIMEOUT);
-        this.longAsyncTimeout = configFactory.getIntProperty(Configs.FRONTEND_LONG_IDLE_TIMEOUT);
+        this.contentLengthChecker = new ContentLengthChecker(forceMaxMessageSizePerTopic);
+        this.defaultAsyncTimeout = idleTime;
+        this.longAsyncTimeout = longIdleTime;
         this.throughputLimiter = throughputLimiter;
     }
 
     @Override
-    public void handleRequest(HttpServerExchange exchange) throws Exception {
+    public void handleRequest(HttpServerExchange exchange) {
         AttachmentContent attachment = exchange.getAttachment(AttachmentContent.KEY);
 
-        int timeout = attachment.getTopic().isReplicationConfirmRequired() ? longAsyncTimeout : defaultAsyncTimeout;
+        Duration timeout = attachment.getTopic().isReplicationConfirmRequired() ? longAsyncTimeout : defaultAsyncTimeout;
 
         attachment.setTimeoutHolder(new TimeoutHolder(
-                timeout,
+                (int) timeout.toMillis(),
                 exchange.getIoThread().executeAfter(
                         () -> runTimeoutHandler(exchange, attachment),
-                        timeout,
+                        timeout.toMillis(),
                         MILLISECONDS)));
 
         ThroughputLimiter.QuotaInsight quotaInsight = throughputLimiter.checkQuota(
@@ -80,21 +79,15 @@ class MessageReadHandler implements HttpHandler {
         ByteArrayOutputStream messageContent = new ByteArrayOutputStream();
         MessageState state = attachment.getMessageState();
 
-        StartedTimersPair readingTimers = attachment.getCachedTopic().startRequestReadTimers();
-
         Receiver receiver = exchange.getRequestReceiver();
 
-        attachment.getTimeoutHolder().onTimeout((Void) -> {
-            readingTimers.close();
-            receiver.pause();
-        });
+        attachment.getTimeoutHolder().onTimeout((Void unused) -> receiver.pause());
 
         if (state.setReading()) {
             receiver.receivePartialBytes(
-                    partialMessageRead(state, messageContent, readingTimers, attachment),
-                    readingError(state, readingTimers, attachment));
+                    partialMessageRead(state, messageContent, attachment),
+                    readingError(state, attachment));
         } else {
-            readingTimers.close();
             messageErrorProcessor.sendAndLog(
                     exchange,
                     attachment.getTopic(),
@@ -103,8 +96,9 @@ class MessageReadHandler implements HttpHandler {
         }
     }
 
-    private Receiver.PartialBytesCallback partialMessageRead(MessageState state, ByteArrayOutputStream messageContent,
-                                                             StartedTimersPair readingTimers, AttachmentContent attachment) {
+    private Receiver.PartialBytesCallback partialMessageRead(MessageState state,
+                                                             ByteArrayOutputStream messageContent,
+                                                             AttachmentContent attachment) {
         return (exchange, message, last) -> {
             if (state.isReadingTimeout()) {
                 endWithoutDefaultResponse(exchange);
@@ -114,7 +108,6 @@ class MessageReadHandler implements HttpHandler {
 
             if (last) {
                 if (state.setFullyRead()) {
-                    readingTimers.close();
                     messageRead(exchange, messageContent.toByteArray(), attachment);
                 } else {
                     endWithoutDefaultResponse(exchange);
@@ -123,10 +116,9 @@ class MessageReadHandler implements HttpHandler {
         };
     }
 
-    private Receiver.ErrorCallback readingError(MessageState state, StartedTimersPair readingTimers, AttachmentContent attachment) {
+    private Receiver.ErrorCallback readingError(MessageState state, AttachmentContent attachment) {
         return (exchange, exception) -> {
             if (state.setReadingError()) {
-                readingTimers.close();
                 attachment.removeTimeout();
                 messageErrorProcessor.sendAndLog(exchange, attachment.getTopic(), attachment.getMessageId(),
                         error("Error while reading message. " + getRootCauseMessage(exception), INTERNAL_ERROR), exception);
@@ -205,7 +197,7 @@ class MessageReadHandler implements HttpHandler {
         exchange.addDefaultResponseListener(new DefaultResponseSimulator());
     }
 
-    final static class DefaultResponseSimulator implements DefaultResponseListener {
+    static final class DefaultResponseSimulator implements DefaultResponseListener {
 
         private static final boolean RESPONSE_SIMULATED = true;
         private final AtomicBoolean responseNotSimulatedOnlyOnce = new AtomicBoolean();

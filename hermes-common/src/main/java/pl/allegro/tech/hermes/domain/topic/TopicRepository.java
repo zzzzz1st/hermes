@@ -28,7 +28,6 @@ public interface TopicRepository {
 
     List<Topic> getTopicsDetails(Collection<TopicName> topicNames);
 
-    boolean isSubscribingRestricted(TopicName topicName);
+    List<Topic> listAllTopics();
 
-    void ensureTopicHasNoSubscriptions(TopicName topicName);
 }

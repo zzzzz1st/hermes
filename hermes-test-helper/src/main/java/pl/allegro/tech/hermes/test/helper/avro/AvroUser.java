@@ -5,14 +5,12 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import pl.allegro.tech.hermes.schema.CompiledSchema;
-import pl.allegro.tech.hermes.schema.SchemaId;
-import pl.allegro.tech.hermes.schema.SchemaVersion;
 import pl.allegro.tech.hermes.test.helper.message.TestMessage;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.Optional;
 
-import static java.util.Optional.ofNullable;
 import static pl.allegro.tech.hermes.test.helper.avro.RecordToBytesConverter.recordToBytes;
 
 public class AvroUser {
@@ -27,7 +25,11 @@ public class AvroUser {
     private final GenericRecord record;
 
     public AvroUser() {
-        this("defaultName", 0, "defaultColor") ;
+        this("defaultName", 0, "defaultColor");
+    }
+
+    public AvroUser(CompiledSchema<Schema> schema) {
+        this(schema, "defaultName", 0, "defaultColor");
     }
 
     public AvroUser(String name, int age, String favouriteColour) {
@@ -85,8 +87,13 @@ public class AvroUser {
     }
 
     public TestMessage asAvroEncodedTestMessage() {
-        Object favoriteColorType = ofNullable(getFavoriteColor()).map(color -> (Object)ImmutableMap.of("string", color)).orElse("null");
-        return TestMessage.of(METADATA_FIELD, null).append(NAME_FIELD, getName()).append(AGE_FIELD, getAge()).append(FAVORITE_COLOR_FIELD, favoriteColorType);
+        Object favoriteColorType = Optional.ofNullable(getFavoriteColor())
+                .map(color -> (Object) ImmutableMap.of("string", color))
+                .orElse("null");
+        return TestMessage.of(METADATA_FIELD, null)
+                .append(NAME_FIELD, getName())
+                .append(AGE_FIELD, getAge())
+                .append(FAVORITE_COLOR_FIELD, favoriteColorType);
     }
 
     public static AvroUser create(CompiledSchema<Schema> schema, byte[] bytes) {

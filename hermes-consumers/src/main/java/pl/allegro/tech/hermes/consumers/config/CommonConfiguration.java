@@ -3,46 +3,36 @@ package pl.allegro.tech.hermes.consumers.config;
 import com.codahale.metrics.MetricRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.curator.framework.CuratorFramework;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import pl.allegro.tech.hermes.common.admin.zookeeper.ZookeeperAdminCache;
 import pl.allegro.tech.hermes.common.clock.ClockFactory;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
-import pl.allegro.tech.hermes.common.di.factories.ConfigFactoryCreator;
+import pl.allegro.tech.hermes.common.concurrent.DefaultExecutorServiceFactory;
+import pl.allegro.tech.hermes.common.concurrent.ExecutorServiceFactory;
 import pl.allegro.tech.hermes.common.di.factories.CuratorClientFactory;
-import pl.allegro.tech.hermes.common.di.factories.GroupRepositoryFactory;
 import pl.allegro.tech.hermes.common.di.factories.HermesCuratorClientFactory;
 import pl.allegro.tech.hermes.common.di.factories.MetricRegistryFactory;
 import pl.allegro.tech.hermes.common.di.factories.ModelAwareZookeeperNotifyingCacheFactory;
-import pl.allegro.tech.hermes.common.di.factories.OAuthProviderRepositoryFactory;
 import pl.allegro.tech.hermes.common.di.factories.ObjectMapperFactory;
-import pl.allegro.tech.hermes.common.di.factories.PathsCompilerFactory;
-import pl.allegro.tech.hermes.common.di.factories.SharedCounterFactory;
-import pl.allegro.tech.hermes.common.di.factories.SubscriptionOffsetChangeIndicatorFactory;
-import pl.allegro.tech.hermes.common.di.factories.SubscriptionRepositoryFactory;
-import pl.allegro.tech.hermes.common.di.factories.TopicRepositoryFactory;
-import pl.allegro.tech.hermes.common.di.factories.UndeliveredMessageLogFactory;
-import pl.allegro.tech.hermes.common.di.factories.WorkloadConstraintsRepositoryFactory;
-import pl.allegro.tech.hermes.common.di.factories.ZookeeperPathsFactory;
 import pl.allegro.tech.hermes.common.kafka.KafkaNamesMapper;
-import pl.allegro.tech.hermes.common.kafka.KafkaNamesMapperFactory;
+import pl.allegro.tech.hermes.common.kafka.NamespaceKafkaNamesMapper;
 import pl.allegro.tech.hermes.common.kafka.offset.SubscriptionOffsetChangeIndicator;
 import pl.allegro.tech.hermes.common.message.undelivered.UndeliveredMessageLog;
-import pl.allegro.tech.hermes.common.message.wrapper.AvroMessageAnySchemaVersionContentWrapper;
+import pl.allegro.tech.hermes.common.message.undelivered.ZookeeperUndeliveredMessageLog;
 import pl.allegro.tech.hermes.common.message.wrapper.AvroMessageContentWrapper;
 import pl.allegro.tech.hermes.common.message.wrapper.AvroMessageHeaderSchemaIdContentWrapper;
 import pl.allegro.tech.hermes.common.message.wrapper.AvroMessageHeaderSchemaVersionContentWrapper;
 import pl.allegro.tech.hermes.common.message.wrapper.AvroMessageSchemaIdAwareContentWrapper;
 import pl.allegro.tech.hermes.common.message.wrapper.AvroMessageSchemaVersionTruncationContentWrapper;
+import pl.allegro.tech.hermes.common.message.wrapper.CompositeMessageContentWrapper;
 import pl.allegro.tech.hermes.common.message.wrapper.DeserializationMetrics;
 import pl.allegro.tech.hermes.common.message.wrapper.JsonMessageContentWrapper;
-import pl.allegro.tech.hermes.common.message.wrapper.MessageContentWrapper;
-import pl.allegro.tech.hermes.common.message.wrapper.SchemaOnlineChecksRateLimiter;
-import pl.allegro.tech.hermes.common.message.wrapper.SchemaOnlineChecksWaitingRateLimiter;
 import pl.allegro.tech.hermes.common.metric.HermesMetrics;
 import pl.allegro.tech.hermes.common.metric.counter.CounterStorage;
 import pl.allegro.tech.hermes.common.metric.counter.zookeeper.ZookeeperCounterStorage;
 import pl.allegro.tech.hermes.common.metric.executor.InstrumentedExecutorServiceFactory;
+import pl.allegro.tech.hermes.common.metric.executor.ThreadPoolMetrics;
 import pl.allegro.tech.hermes.common.util.InetAddressInstanceIdResolver;
 import pl.allegro.tech.hermes.common.util.InstanceIdResolver;
 import pl.allegro.tech.hermes.domain.filtering.MessageFilters;
@@ -57,36 +47,63 @@ import pl.allegro.tech.hermes.domain.oauth.OAuthProviderRepository;
 import pl.allegro.tech.hermes.domain.subscription.SubscriptionRepository;
 import pl.allegro.tech.hermes.domain.topic.TopicRepository;
 import pl.allegro.tech.hermes.domain.workload.constraints.WorkloadConstraintsRepository;
+import pl.allegro.tech.hermes.infrastructure.dc.DatacenterNameProvider;
+import pl.allegro.tech.hermes.infrastructure.dc.DcNameSource;
+import pl.allegro.tech.hermes.infrastructure.dc.DefaultDatacenterNameProvider;
+import pl.allegro.tech.hermes.infrastructure.dc.EnvironmentVariableDatacenterNameProvider;
+import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperGroupRepository;
+import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperOAuthProviderRepository;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperPaths;
+import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperSubscriptionOffsetChangeIndicator;
+import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperSubscriptionRepository;
+import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperTopicRepository;
+import pl.allegro.tech.hermes.infrastructure.zookeeper.ZookeeperWorkloadConstraintsRepository;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.cache.ModelAwareZookeeperNotifyingCache;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.counter.SharedCounter;
 import pl.allegro.tech.hermes.infrastructure.zookeeper.notifications.ZookeeperInternalNotificationBus;
 import pl.allegro.tech.hermes.metrics.PathsCompiler;
 import pl.allegro.tech.hermes.schema.SchemaRepository;
 
-import javax.inject.Named;
 import java.time.Clock;
 import java.util.Arrays;
 import java.util.List;
+import javax.inject.Named;
 
 import static java.util.Collections.emptyList;
 
 @Configuration
+@EnableConfigurationProperties({
+        MetricsProperties.class,
+        GraphiteProperties.class,
+        SchemaProperties.class,
+        ZookeeperClustersProperties.class,
+        ContentRootProperties.class,
+        DatacenterNameProperties.class
+})
 public class CommonConfiguration {
+
+    @Bean
+    public DatacenterNameProvider dcNameProvider(DatacenterNameProperties datacenterNameProperties) {
+        if (datacenterNameProperties.getSource() == DcNameSource.ENV) {
+            return new EnvironmentVariableDatacenterNameProvider(datacenterNameProperties.getEnv());
+        } else {
+            return new DefaultDatacenterNameProvider();
+        }
+    }
 
     @Bean
     public SubscriptionRepository subscriptionRepository(CuratorFramework zookeeper,
                                                          ZookeeperPaths paths,
                                                          ObjectMapper mapper,
                                                          TopicRepository topicRepository) {
-        return new SubscriptionRepositoryFactory(zookeeper, paths, mapper, topicRepository).provide();
+        return new ZookeeperSubscriptionRepository(zookeeper, mapper, paths, topicRepository);
     }
 
     @Bean
     public OAuthProviderRepository oAuthProviderRepository(CuratorFramework zookeeper,
                                                            ZookeeperPaths paths,
                                                            ObjectMapper mapper) {
-        return new OAuthProviderRepositoryFactory(zookeeper, paths, mapper).provide();
+        return new ZookeeperOAuthProviderRepository(zookeeper, mapper, paths);
     }
 
     @Bean
@@ -94,22 +111,26 @@ public class CommonConfiguration {
                                            ZookeeperPaths paths,
                                            ObjectMapper mapper,
                                            GroupRepository groupRepository) {
-        return new TopicRepositoryFactory(zookeeper, paths, mapper, groupRepository).provide();
+        return new ZookeeperTopicRepository(zookeeper, mapper, paths, groupRepository);
     }
 
     @Bean
     public GroupRepository groupRepository(CuratorFramework zookeeper, ZookeeperPaths paths, ObjectMapper mapper) {
-        return new GroupRepositoryFactory(zookeeper, paths, mapper).provide();
+        return new ZookeeperGroupRepository(zookeeper, mapper, paths);
     }
 
     @Bean(destroyMethod = "close")
-    public CuratorFramework hermesCurator(ConfigFactory configFactory, CuratorClientFactory curatorClientFactory) {
-        return new HermesCuratorClientFactory(configFactory, curatorClientFactory).provide();
+    public CuratorFramework hermesCurator(ZookeeperClustersProperties zookeeperClustersProperties,
+                                          CuratorClientFactory curatorClientFactory, DatacenterNameProvider datacenterNameProvider) {
+        ZookeeperProperties zookeeperProperties = zookeeperClustersProperties.toZookeeperProperties(datacenterNameProvider);
+        return new HermesCuratorClientFactory(zookeeperProperties, curatorClientFactory).provide();
     }
 
     @Bean
-    public CuratorClientFactory curatorClientFactory(ConfigFactory configFactory) {
-        return new CuratorClientFactory(configFactory);
+    public CuratorClientFactory curatorClientFactory(ZookeeperClustersProperties zookeeperClustersProperties,
+                                                     DatacenterNameProvider datacenterNameProvider) {
+        ZookeeperProperties zookeeperProperties = zookeeperClustersProperties.toZookeeperProperties(datacenterNameProvider);
+        return new CuratorClientFactory(zookeeperProperties);
     }
 
     @Bean
@@ -119,20 +140,30 @@ public class CommonConfiguration {
     }
 
     @Bean(destroyMethod = "stop")
-    public ModelAwareZookeeperNotifyingCache modelAwareZookeeperNotifyingCache(CuratorFramework curator, ConfigFactory config) {
-        return new ModelAwareZookeeperNotifyingCacheFactory(curator, config).provide();
+    public ModelAwareZookeeperNotifyingCache modelAwareZookeeperNotifyingCache(CuratorFramework curator,
+                                                                               ZookeeperClustersProperties zookeeperClustersProperties,
+                                                                               DatacenterNameProvider datacenterNameProvider) {
+        ZookeeperProperties zookeeperProperties = zookeeperClustersProperties.toZookeeperProperties(datacenterNameProvider);
+        return new ModelAwareZookeeperNotifyingCacheFactory(curator, zookeeperProperties).provide();
     }
 
     @Bean
     public UndeliveredMessageLog undeliveredMessageLog(CuratorFramework zookeeper,
                                                        ZookeeperPaths paths,
-                                                       ObjectMapper mapper) {
-        return new UndeliveredMessageLogFactory(zookeeper, paths, mapper).provide();
+                                                       ObjectMapper mapper,
+                                                       HermesMetrics hermesMetrics) {
+        return new ZookeeperUndeliveredMessageLog(zookeeper, paths, mapper, hermesMetrics);
+    }
+
+
+    @Bean
+    public ThreadPoolMetrics threadPoolMetrics(HermesMetrics hermesMetrics) {
+        return new ThreadPoolMetrics(hermesMetrics);
     }
 
     @Bean
-    public InstrumentedExecutorServiceFactory instrumentedExecutorServiceFactory(HermesMetrics hermesMetrics) {
-        return new InstrumentedExecutorServiceFactory(hermesMetrics);
+    public InstrumentedExecutorServiceFactory instrumentedExecutorServiceFactory(ThreadPoolMetrics threadPoolMetrics) {
+        return new InstrumentedExecutorServiceFactory(threadPoolMetrics);
     }
 
     @Bean
@@ -144,34 +175,31 @@ public class CommonConfiguration {
     }
 
     @Bean
-    public ObjectMapper objectMapper(ConfigFactory configFactory) {
-        return new ObjectMapperFactory(configFactory).provide();
+    public ObjectMapper objectMapper(SchemaProperties schemaProperties) {
+        return new ObjectMapperFactory(schemaProperties.isIdSerializationEnabled()).provide();
     }
 
 
     @Bean
-    public MessageContentWrapper messageContentWrapper(ConfigFactory config,
-                                                       ObjectMapper mapper,
-                                                       Clock clock,
-                                                       SchemaRepository schemaRepository,
-                                                       DeserializationMetrics deserializationMetrics,
-                                                       ConfigFactory configFactory,
-                                                       SchemaOnlineChecksRateLimiter schemaOnlineChecksRateLimiter) {
+    public CompositeMessageContentWrapper messageContentWrapper(ObjectMapper mapper,
+                                                                Clock clock,
+                                                                SchemaRepository schemaRepository,
+                                                                DeserializationMetrics deserializationMetrics,
+                                                                SchemaProperties schemaProperties,
+                                                                ContentRootProperties contentRootProperties) {
         AvroMessageContentWrapper avroMessageContentWrapper = new AvroMessageContentWrapper(clock);
 
-        return new MessageContentWrapper(
-                new JsonMessageContentWrapper(config, mapper),
+        return new CompositeMessageContentWrapper(
+                new JsonMessageContentWrapper(contentRootProperties.getMessage(), contentRootProperties.getMetadata(), mapper),
                 avroMessageContentWrapper,
                 new AvroMessageSchemaIdAwareContentWrapper(schemaRepository, avroMessageContentWrapper,
                         deserializationMetrics),
                 new AvroMessageHeaderSchemaVersionContentWrapper(schemaRepository, avroMessageContentWrapper,
                         deserializationMetrics),
                 new AvroMessageHeaderSchemaIdContentWrapper(schemaRepository, avroMessageContentWrapper,
-                        deserializationMetrics, configFactory),
-                new AvroMessageAnySchemaVersionContentWrapper(schemaRepository, schemaOnlineChecksRateLimiter,
-                        avroMessageContentWrapper, deserializationMetrics),
+                        deserializationMetrics, schemaProperties.isIdHeaderEnabled()),
                 new AvroMessageSchemaVersionTruncationContentWrapper(schemaRepository, avroMessageContentWrapper,
-                        deserializationMetrics, configFactory)
+                        deserializationMetrics, schemaProperties.isVersionTruncationEnabled())
         );
     }
 
@@ -181,18 +209,8 @@ public class CommonConfiguration {
     }
 
     @Bean
-    public SchemaOnlineChecksRateLimiter schemaOnlineChecksWaitingRateLimiter(ConfigFactory configFactory) {
-        return new SchemaOnlineChecksWaitingRateLimiter(configFactory);
-    }
-
-    @Bean
-    public KafkaNamesMapper prodKafkaNamesMapper(ConfigFactory configFactory) {
-        return new KafkaNamesMapperFactory(configFactory).provide();
-    }
-
-    @Bean
-    public ConfigFactory prodConfigFactory() {
-        return new ConfigFactoryCreator().provide();
+    public KafkaNamesMapper prodKafkaNamesMapper(KafkaClustersProperties kafkaClustersProperties) {
+        return new NamespaceKafkaNamesMapper(kafkaClustersProperties.getNamespace(), kafkaClustersProperties.getNamespaceSeparator());
     }
 
     @Bean
@@ -201,15 +219,17 @@ public class CommonConfiguration {
     }
 
     @Bean
-    public ZookeeperPaths zookeeperPaths(ConfigFactory configFactory) {
-        return new ZookeeperPathsFactory(configFactory).provide();
+    public ZookeeperPaths zookeeperPaths(ZookeeperClustersProperties zookeeperClustersProperties,
+                                         DatacenterNameProvider datacenterNameProvider) {
+        ZookeeperProperties zookeeperProperties = zookeeperClustersProperties.toZookeeperProperties(datacenterNameProvider);
+        return new ZookeeperPaths(zookeeperProperties.getRoot());
     }
 
     @Bean
     public WorkloadConstraintsRepository workloadConstraintsRepository(CuratorFramework curator,
                                                                        ObjectMapper mapper,
                                                                        ZookeeperPaths paths) {
-        return new WorkloadConstraintsRepositoryFactory(curator, mapper, paths).provide();
+        return new ZookeeperWorkloadConstraintsRepository(curator, mapper, paths);
     }
 
     @Bean
@@ -219,11 +239,12 @@ public class CommonConfiguration {
     }
 
     @Bean
-    public MetricRegistry metricRegistry(ConfigFactory configFactory,
+    public MetricRegistry metricRegistry(MetricsProperties metricsProperties,
+                                         GraphiteProperties graphiteProperties,
                                          CounterStorage counterStorage,
                                          InstanceIdResolver instanceIdResolver,
                                          @Named("moduleName") String moduleName) {
-        return new MetricRegistryFactory(configFactory, counterStorage, instanceIdResolver, moduleName)
+        return new MetricRegistryFactory(metricsProperties, graphiteProperties, counterStorage, instanceIdResolver, moduleName)
                 .provide();
     }
 
@@ -235,21 +256,30 @@ public class CommonConfiguration {
 
     @Bean
     public PathsCompiler pathsCompiler(InstanceIdResolver instanceIdResolver) {
-        return new PathsCompilerFactory(instanceIdResolver).provide();
+        return new PathsCompiler(instanceIdResolver.resolve());
     }
 
     @Bean
     public CounterStorage zookeeperCounterStorage(SharedCounter sharedCounter,
                                                   SubscriptionRepository subscriptionRepository,
                                                   PathsCompiler pathsCompiler,
-                                                  ConfigFactory configFactory) {
-        return new ZookeeperCounterStorage(sharedCounter, subscriptionRepository, pathsCompiler, configFactory);
+                                                  ZookeeperClustersProperties zookeeperClustersProperties,
+                                                  DatacenterNameProvider datacenterNameProvider) {
+        ZookeeperProperties zookeeperProperties = zookeeperClustersProperties.toZookeeperProperties(datacenterNameProvider);
+        return new ZookeeperCounterStorage(sharedCounter, subscriptionRepository, pathsCompiler, zookeeperProperties.getRoot());
     }
 
     @Bean
     public SharedCounter sharedCounter(CuratorFramework zookeeper,
-                                       ConfigFactory config) {
-        return new SharedCounterFactory(zookeeper, config).provide();
+                                       ZookeeperClustersProperties zookeeperClustersProperties,
+                                       MetricsProperties metricsProperties,
+                                       DatacenterNameProvider datacenterNameProvider) {
+        ZookeeperProperties zookeeperProperties = zookeeperClustersProperties.toZookeeperProperties(datacenterNameProvider);
+        return new SharedCounter(zookeeper,
+                metricsProperties.getCounterExpireAfterAccess(),
+                zookeeperProperties.getBaseSleepTime(),
+                zookeeperProperties.getMaxRetries()
+        );
     }
 
     @Bean
@@ -261,7 +291,7 @@ public class CommonConfiguration {
     public SubscriptionOffsetChangeIndicator subscriptionOffsetChangeIndicatorFactory(CuratorFramework zookeeper,
                                                                                       ZookeeperPaths paths,
                                                                                       SubscriptionRepository subscriptionRepository) {
-        return new SubscriptionOffsetChangeIndicatorFactory(zookeeper, paths, subscriptionRepository).provide();
+        return new ZookeeperSubscriptionOffsetChangeIndicator(zookeeper, paths, subscriptionRepository);
     }
 
     @Bean
@@ -275,4 +305,8 @@ public class CommonConfiguration {
         return new FilterChainFactory(messageFilters);
     }
 
+    @Bean
+    public ExecutorServiceFactory executorServiceFactory() {
+        return new DefaultExecutorServiceFactory();
+    }
 }

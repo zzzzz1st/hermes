@@ -1,3 +1,6 @@
+apply plugin: 'application'
+mainClassName = 'pl.allegro.tech.hermes.consumers.HermesConsumers'
+
 configurations {
     sbeClasspath
 }
@@ -16,7 +19,6 @@ dependencies {
     compile group: 'javax.jms', name: 'javax.jms-api', version: '2.0'
     compile group: 'joda-time', name: 'joda-time', version: '2.5'
 
-    compile group: 'org.apache.httpcomponents', name: 'httpclient', version: '4.5.13'
     compile(group: 'com.github.rholder', name: 'guava-retrying', version: '2.0.0') {
         exclude module: 'guava'
     }
@@ -44,11 +46,6 @@ dependencies {
     testCompile group: 'org.spockframework', name: 'spock-core', version: versions.spock
 
     sbeClasspath group: 'uk.co.real-logic', name: 'sbe-all', version: '1.12.8'
-}
-
-if (project.hasProperty('distribution')) {
-    apply plugin: 'application'
-    mainClassName = 'pl.allegro.tech.hermes.consumers.HermesConsumers'
 }
 
 def generatedPath = "${buildDir}/generated/java/"

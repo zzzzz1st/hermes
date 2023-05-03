@@ -83,7 +83,7 @@ class TopicHandler implements HttpHandler {
 
     private boolean hasPermission(HttpServerExchange exchange, Topic topic) {
         Optional<Account> account = extractAccount(exchange);
-        return account.isPresent() ? hasPermission(topic, account.get()) : topic.isUnauthenticatedAccessEnabled();
+        return account.map(value -> hasPermission(topic, value)).orElseGet(topic::isUnauthenticatedAccessEnabled);
     }
 
     private boolean hasPermission(Topic topic, Account publisher) {
@@ -118,7 +118,8 @@ class TopicHandler implements HttpHandler {
                 qualifiedTopicName);
     }
 
-    // Default Undertow's response code (200) was changed in order to avoid situations in which something wrong happens and Hermes-Frontend does not publish message but return code 200
+    // Default Undertow's response code (200) was changed in order to avoid situations in which something wrong happens and Hermes-Frontend
+    // does not publish message but return code 200
     // Since the default code is 500, clients have information that they should retry publishing
     private void setDefaultResponseCode(HttpServerExchange exchange) {
         exchange.setStatusCode(INTERNAL_SERVER_ERROR);

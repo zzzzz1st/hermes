@@ -1,6 +1,7 @@
 package pl.allegro.tech.hermes.consumers.consumer;
 
 import com.codahale.metrics.Meter;
+import com.codahale.metrics.Timer;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -9,7 +10,7 @@ import org.mockito.runners.MockitoJUnitRunner;
 import pl.allegro.tech.hermes.api.Subscription;
 import pl.allegro.tech.hermes.common.metric.HermesMetrics;
 import pl.allegro.tech.hermes.common.metric.Meters;
-import pl.allegro.tech.hermes.common.metric.timer.ConsumerLatencyTimer;
+import pl.allegro.tech.hermes.common.metric.Timers;
 import pl.allegro.tech.hermes.consumers.consumer.rate.AdjustableSemaphore;
 import pl.allegro.tech.hermes.consumers.consumer.rate.SerialConsumerRateLimiter;
 import pl.allegro.tech.hermes.consumers.consumer.result.ErrorHandler;
@@ -18,6 +19,7 @@ import pl.allegro.tech.hermes.consumers.consumer.sender.MessageSender;
 import pl.allegro.tech.hermes.consumers.consumer.sender.MessageSenderFactory;
 import pl.allegro.tech.hermes.consumers.consumer.sender.MessageSendingResult;
 import pl.allegro.tech.hermes.consumers.consumer.sender.timeout.FutureAsyncTimeout;
+import pl.allegro.tech.hermes.consumers.supervisor.workload.weighted.NoOpConsumerNodeLoadRegistry;
 import pl.allegro.tech.hermes.consumers.test.MessageBuilder;
 import pl.allegro.tech.hermes.test.helper.builder.SubscriptionBuilder;
 
@@ -27,8 +29,6 @@ import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 
-import static io.netty.handler.codec.http.HttpResponseStatus.TOO_MANY_REQUESTS;
-import static io.netty.handler.codec.http.HttpResponseStatus.SERVICE_UNAVAILABLE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.eq;
@@ -70,10 +70,10 @@ public class ConsumerMessageSenderTest {
     private HermesMetrics hermesMetrics;
 
     @Mock
-    private ConsumerLatencyTimer consumerLatencyTimer;
+    private Timer consumerLatencyTimer;
 
     @Mock
-    private ConsumerLatencyTimer.Context consumerLatencyTimerContext;
+    private Timer.Context consumerLatencyTimerContext;
 
     @Mock
     private Meter failedMeter;
@@ -94,10 +94,12 @@ public class ConsumerMessageSenderTest {
     }
 
     private void setUpMetrics(Subscription subscription) {
-        when(hermesMetrics.latencyTimer(subscription)).thenReturn(consumerLatencyTimer);
-        when(hermesMetrics.consumerErrorsOtherMeter(subscription)).thenReturn(errors);
+        when(hermesMetrics.timer(Timers.SUBSCRIPTION_LATENCY, subscription.getTopicName(), subscription.getName()))
+                .thenReturn(consumerLatencyTimer);
+        when(hermesMetrics.consumerErrorsOtherMeter(subscription.getQualifiedName())).thenReturn(errors);
         when(consumerLatencyTimer.time()).thenReturn(consumerLatencyTimerContext);
-        when(hermesMetrics.meter(Meters.FAILED_METER_SUBSCRIPTION, subscription.getTopicName(), subscription.getName())).thenReturn(failedMeter);
+        when(hermesMetrics.meter(Meters.FAILED_METER_SUBSCRIPTION, subscription.getTopicName(), subscription.getName()))
+                .thenReturn(failedMeter);
     }
 
     @Test
@@ -112,8 +114,7 @@ public class ConsumerMessageSenderTest {
 
         // then
         verifySemaphoreReleased();
-        verifyRateLimiterSuccessfulSendingCountedTimes(1);
-        verifyLatencyTimersCountedTimes(1, 1);
+        verifyLatencyTimersCountedTimes(subscription, 1, 1);
         verifyZeroInteractions(errorHandler);
         verifyZeroInteractions(failedMeter);
     }
@@ -130,9 +131,7 @@ public class ConsumerMessageSenderTest {
 
         // then
         verifySemaphoreReleased();
-        verifyLatencyTimersCountedTimes(3, 3);
-        verifyRateLimiterFailedSendingCountedTimes(2);
-        verifyRateLimiterSuccessfulSendingCountedTimes(1);
+        verifyLatencyTimersCountedTimes(subscription, 3, 3);
         verifyErrorHandlerHandleFailed(message, subscription, 2);
     }
 
@@ -149,8 +148,7 @@ public class ConsumerMessageSenderTest {
         verify(errorHandler, timeout(1000)).handleDiscarded(eq(message), eq(subscription), any(MessageSendingResult.class));
         verifySemaphoreReleased();
         verifyZeroInteractions(successHandler);
-        verifyLatencyTimersCountedTimes(1, 1);
-        verifyRateLimiterFailedSendingCountedTimes(1);
+        verifyLatencyTimersCountedTimes(subscription, 1, 1);
     }
 
     @Test
@@ -166,7 +164,7 @@ public class ConsumerMessageSenderTest {
         verify(errorHandler, timeout(1000)).handleDiscarded(eq(message), eq(subscription), any(MessageSendingResult.class));
         verifySemaphoreReleased();
         verifyZeroInteractions(successHandler);
-        verifyLatencyTimersCountedTimes(1, 1);
+        verifyLatencyTimersCountedTimes(subscription, 1, 1);
     }
 
     @Test
@@ -182,51 +180,11 @@ public class ConsumerMessageSenderTest {
 
         // then
         verifySemaphoreReleased();
-        verify(errorHandler, timeout(1000).times(3)).handleFailed(eq(message), eq(subscriptionWith4xxRetry), any(MessageSendingResult.class));
-    }
-
-    @Test
-    public void shouldTreat4xxResponseForSubscriptionWithNo4xxRetryAsSuccess() {
-        // given
-        Message message = message();
-        doReturn(failure(403)).doReturn(success()).when(messageSender).send(message);
-
-        // when
-        sender.sendAsync(message);
-
-        // then
-        verifyRateLimiterFailedSendingCountedTimes(0);
-        verifyRateLimiterSuccessfulSendingCountedTimes(1);
-        verifyErrorHandlerHandleFailed(message, subscription, 1);
-    }
-
-    @Test
-    public void shouldReduceSendingRateLimitOnErrorResponseOtherThan4xxForSubscriptionWithNo4xxRetry() {
-        // given
-        Message message = message();
-        doReturn(failure(500)).doReturn(success()).when(messageSender).send(message);
-
-        // when
-        sender.sendAsync(message);
-
-        // then
-        verifyRateLimiterFailedSendingCountedTimes(1);
-        verifyErrorHandlerHandleFailed(message, subscription, 1);
-    }
-
-    @Test
-    public void shouldReduceSendingRateLimitOn4xxResponseForSubscriptionWith4xxRetry() {
-        // given
-        ConsumerMessageSender sender = consumerMessageSender(subscriptionWith4xxRetry);
-        Message message = message();
-        doReturn(failure(403)).doReturn(failure(403)).doReturn(success()).when(messageSender).send(message);
-
-        // when
-        sender.sendAsync(message);
-
-        // then
-        verifyRateLimiterFailedSendingCountedTimes(2);
-        verifyRateLimiterSuccessfulSendingCountedTimes(1);
+        verify(errorHandler,
+            timeout(1000).times(3)).handleFailed(eq(message),
+            eq(subscriptionWith4xxRetry),
+            any(MessageSendingResult.class)
+        );
     }
 
     @Test
@@ -242,27 +200,14 @@ public class ConsumerMessageSenderTest {
         sender.sendAsync(message);
 
         // then
-        verifyRateLimiterFailedSendingCountedTimes(2);
-        verifyRateLimiterSuccessfulSendingCountedTimes(1);
-    }
-
-    @Test
-    public void shouldRaiseTimeoutWhenSenderNotCompletesResult() {
-        // given
-        Message message = message();
-        when(messageSender.send(message)).thenReturn(new CompletableFuture<>());
-
-        // when
-        sender.sendAsync(message);
-
-        // then
-        verifyErrorHandlerHandleFailed(message, subscription, 1, 3000);
+        verifyErrorHandlerHandleFailed(message, subscription, 2);
+        verify(successHandler, timeout(1000)).handleSuccess(eq(message), eq(subscription), any(MessageSendingResult.class));
     }
 
     @Test
     public void shouldBackoffRetriesWhenEndpointFails() throws InterruptedException {
         // given
-        int executionTime = 100;
+        final int executionTime = 100;
         int senderBackoffTime = 50;
         Subscription subscriptionWithBackoff = subscriptionWithBackoff(senderBackoffTime);
         setUpMetrics(subscriptionWithBackoff);
@@ -280,51 +225,6 @@ public class ConsumerMessageSenderTest {
     }
 
     @Test
-    public void shouldNotBackoffRetriesOnRetryAfter() throws InterruptedException {
-        // given
-        int retrySeconds = 1;
-        Message message = message();
-        doReturn(backoff(retrySeconds)).doReturn(success()).when(messageSender).send(message);
-
-        // when
-        sender.sendAsync(message);
-
-        // then
-        verifyRateLimiterFailedSendingCountedTimes(0);
-        verifyRateLimiterSuccessfulSendingCountedTimes(2);
-        verifySemaphoreReleased();
-    }
-
-    @Test
-    public void shouldBackoffRetriesOnServiceUnavailableWithoutRetryAfter() throws InterruptedException {
-        // given
-        Message message = message();
-        doReturn(failure(SERVICE_UNAVAILABLE.code())).doReturn(success()).when(messageSender).send(message);
-
-        // when
-        sender.sendAsync(message);
-
-        // then
-        verifyRateLimiterFailedSendingCountedTimes(1);
-        verifyRateLimiterSuccessfulSendingCountedTimes(1);
-        verifySemaphoreReleased();
-    }
-
-    @Test
-    public void shouldBackoffRetriesOnTooManyRequestsWithoutRetryAfter() throws InterruptedException {
-        // given
-        Message message = message();
-        doReturn(failure(TOO_MANY_REQUESTS.code())).doReturn(success()).when(messageSender).send(message);
-
-        // when
-        sender.sendAsync(message);
-
-        // then
-        verifyRateLimiterSuccessfulSendingCountedTimes(1);
-        verifySemaphoreReleased();
-    }
-
-    @Test
     public void shouldNotRetryOnRetryAfterAboveTtl() throws InterruptedException {
         // given
         int retrySeconds = subscription.getSerialSubscriptionPolicy().getMessageTtl();
@@ -335,7 +235,6 @@ public class ConsumerMessageSenderTest {
         sender.sendAsync(message);
 
         // then
-        verifyRateLimiterSuccessfulSendingCountedTimes(1);
         verifyErrorHandlerHandleDiscarded(message, subscription);
         verifySemaphoreReleased();
     }
@@ -347,7 +246,8 @@ public class ConsumerMessageSenderTest {
         Subscription subscriptionWithModfiedEndpoint = subscriptionWithEndpoint("http://somewhere:9876");
         MessageSender otherMessageSender = mock(MessageSender.class);
 
-        when(messageSenderFactory.create(subscriptionWithModfiedEndpoint)).thenReturn(otherMessageSender);
+        when(messageSenderFactory.create(eq(subscriptionWithModfiedEndpoint), any(ResilientMessageSender.class)))
+                .thenReturn(otherMessageSender);
         when(otherMessageSender.send(message)).thenReturn(success());
 
         // when
@@ -365,7 +265,8 @@ public class ConsumerMessageSenderTest {
         Subscription subscriptionWithModifiedTimeout = subscriptionWithRequestTimeout(2000);
         MessageSender otherMessageSender = mock(MessageSender.class);
 
-        when(messageSenderFactory.create(subscriptionWithModifiedTimeout)).thenReturn(otherMessageSender);
+        when(messageSenderFactory.create(eq(subscriptionWithModifiedTimeout), any(ResilientMessageSender.class)))
+                .thenReturn(otherMessageSender);
         when(otherMessageSender.send(message)).thenReturn(success());
 
         // when
@@ -441,7 +342,6 @@ public class ConsumerMessageSenderTest {
 
         // then
         verifyZeroInteractions(successHandler);
-        verifyRateLimiterFailedSendingCountedTimes(2);
     }
 
     @Test
@@ -460,8 +360,8 @@ public class ConsumerMessageSenderTest {
         sender.sendAsync(message);
 
         //then
-        verify(successHandler, timeout(retrySeconds * 1000 * 2 + 500 ))
-                .handleSuccess(eq(message), eq(subscription), any(MessageSendingResult.class));
+        verify(successHandler, timeout(retrySeconds * 1000 * 2 + 500))
+            .handleSuccess(eq(message), eq(subscription), any(MessageSendingResult.class));
     }
 
     @Test
@@ -484,7 +384,7 @@ public class ConsumerMessageSenderTest {
     }
 
     private ConsumerMessageSender consumerMessageSender(Subscription subscription) {
-        when(messageSenderFactory.create(subscription)).thenReturn(messageSender);
+        when(messageSenderFactory.create(eq(subscription), any(ResilientMessageSender.class))).thenReturn(messageSender);
         ConsumerMessageSender sender = new ConsumerMessageSender(
                 subscription,
                 messageSenderFactory,
@@ -493,22 +393,15 @@ public class ConsumerMessageSenderTest {
                 rateLimiter,
                 Executors.newSingleThreadExecutor(),
                 () -> inflightSemaphore.release(),
-                hermesMetrics,
+                new SubscriptionMetrics(hermesMetrics, subscription.getQualifiedName()),
                 ASYNC_TIMEOUT_MS,
-                new FutureAsyncTimeout<>(MessageSendingResult::failedResult, Executors.newSingleThreadScheduledExecutor()),
-                Clock.systemUTC()
+                new FutureAsyncTimeout(Executors.newSingleThreadScheduledExecutor()),
+                Clock.systemUTC(),
+                new NoOpConsumerNodeLoadRegistry().register(subscription.getQualifiedName())
         );
         sender.initialize();
 
         return sender;
-    }
-
-    private void verifyRateLimiterSuccessfulSendingCountedTimes(int count) {
-        verify(rateLimiter, timeout(1000).times(count)).registerSuccessfulSending();
-    }
-
-    private void verifyRateLimiterFailedSendingCountedTimes(int count) {
-        verify(rateLimiter, timeout(1000).times(count)).registerFailedSending();
     }
 
     private void verifyErrorHandlerHandleFailed(Message message, Subscription subscription, int times) {
@@ -523,10 +416,10 @@ public class ConsumerMessageSenderTest {
         verify(errorHandler, timeout(1000).times(1)).handleDiscarded(eq(message), eq(subscription), any(MessageSendingResult.class));
     }
 
-    private void verifyLatencyTimersCountedTimes(int timeCount, int closeCount) {
-        verify(hermesMetrics, times(1)).latencyTimer(subscription);
+    private void verifyLatencyTimersCountedTimes(Subscription subscription, int timeCount, int closeCount) {
+        verify(hermesMetrics, times(1)).timer(Timers.SUBSCRIPTION_LATENCY, subscription.getTopicName(), subscription.getName());
         verify(consumerLatencyTimer, times(timeCount)).time();
-        verify(consumerLatencyTimerContext, times(closeCount)).stop();
+        verify(consumerLatencyTimerContext, times(closeCount)).close();
     }
 
     private Subscription subscriptionWithTtl(int ttl) {
@@ -612,6 +505,7 @@ public class ConsumerMessageSenderTest {
     private void verifySemaphoreReleased() {
         assertThat(inflightSemaphore.availablePermits()).isEqualTo(1);
     }
+
 
     private Message message() {
         return messageWithTimestamp(System.currentTimeMillis());

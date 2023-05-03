@@ -10,7 +10,7 @@ import pl.allegro.tech.hermes.api.SubscriptionPolicy;
 import pl.allegro.tech.hermes.api.Topic;
 import pl.allegro.tech.hermes.api.TopicMetrics;
 import pl.allegro.tech.hermes.api.TopicName;
-import pl.allegro.tech.hermes.common.config.Configs;
+import pl.allegro.tech.hermes.frontend.config.GraphiteProperties;
 import pl.allegro.tech.hermes.integration.env.SharedServices;
 import pl.allegro.tech.hermes.integration.helper.GraphiteEndpoint;
 import pl.allegro.tech.hermes.integration.helper.graphite.GraphiteMockServer;
@@ -18,8 +18,8 @@ import pl.allegro.tech.hermes.integration.shame.Unreliable;
 import pl.allegro.tech.hermes.test.helper.endpoint.RemoteServiceEndpoint;
 import pl.allegro.tech.hermes.test.helper.message.TestMessage;
 
-import javax.ws.rs.BadRequestException;
 import java.util.UUID;
+import javax.ws.rs.BadRequestException;
 
 import static com.google.common.collect.ImmutableMap.of;
 import static com.googlecode.catchexception.CatchException.catchException;
@@ -39,11 +39,14 @@ public class MetricsTest extends IntegrationTest {
 
     private GraphiteMockServer graphiteServer;
 
+    private GraphiteProperties graphiteProperties;
+
     @BeforeMethod
     public void initializeAlways() {
         this.graphiteEndpoint = new GraphiteEndpoint(SharedServices.services().graphiteHttpMock());
         this.remoteService = new RemoteServiceEndpoint(SharedServices.services().serviceMock());
         this.graphiteServer = SharedServices.services().graphiteMock();
+        this.graphiteProperties = new GraphiteProperties();
     }
 
     @Unreliable
@@ -120,7 +123,9 @@ public class MetricsTest extends IntegrationTest {
         // given
         Topic topic = operations.buildTopic("pl.allegro.tech.hermes", "topic");
         operations.createSubscription(topic, "pl.allegro.tech.hermes.subscription", remoteService.getUrl());
-        graphiteEndpoint.returnMetric(subscriptionMetricsStub("pl_allegro_tech_hermes.topic.pl_allegro_tech_hermes_subscription").withRate(15).build());
+        graphiteEndpoint.returnMetric(
+                subscriptionMetricsStub("pl_allegro_tech_hermes.topic.pl_allegro_tech_hermes_subscription").withRate(15).build()
+        );
 
         wait.until(() -> {
             // when
@@ -308,7 +313,7 @@ public class MetricsTest extends IntegrationTest {
     }
 
     private String metricNameWithPrefix(String metricName) {
-        return String.format("%s.%s", Configs.GRAPHITE_PREFIX.getDefaultValue(), metricName);
+        return String.format("%s.%s", graphiteProperties.getPrefix(), metricName);
     }
 
     private static String jsonWithField(String key, Object value) {

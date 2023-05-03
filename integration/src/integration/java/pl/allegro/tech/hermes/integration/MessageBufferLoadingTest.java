@@ -6,9 +6,8 @@ import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 import pl.allegro.tech.hermes.api.ContentType;
 import pl.allegro.tech.hermes.api.Topic;
-import pl.allegro.tech.hermes.common.config.Configs;
+import pl.allegro.tech.hermes.common.message.wrapper.CompositeMessageContentWrapper;
 import pl.allegro.tech.hermes.common.message.wrapper.JsonMessageContentWrapper;
-import pl.allegro.tech.hermes.common.message.wrapper.MessageContentWrapper;
 import pl.allegro.tech.hermes.frontend.buffer.BackupFilesManager;
 import pl.allegro.tech.hermes.frontend.buffer.MessageRepository;
 import pl.allegro.tech.hermes.frontend.buffer.chronicle.ChronicleMapMessageRepository;
@@ -34,7 +33,11 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static javax.ws.rs.core.Response.Status.ACCEPTED;
 import static javax.ws.rs.core.Response.Status.CREATED;
 import static org.assertj.core.api.Assertions.assertThat;
-import static pl.allegro.tech.hermes.common.config.Configs.MESSAGES_LOCAL_STORAGE_DIRECTORY;
+import static pl.allegro.tech.hermes.frontend.FrontendConfigurationProperties.KAFKA_BROKER_LIST;
+import static pl.allegro.tech.hermes.frontend.FrontendConfigurationProperties.MESSAGES_LOCAL_STORAGE_DIRECTORY;
+import static pl.allegro.tech.hermes.frontend.FrontendConfigurationProperties.MESSAGES_LOCAL_STORAGE_ENABLED;
+import static pl.allegro.tech.hermes.frontend.FrontendConfigurationProperties.SCHEMA_REPOSITORY_SERVER_URL;
+import static pl.allegro.tech.hermes.frontend.FrontendConfigurationProperties.ZOOKEEPER_CONNECTION_STRING;
 import static pl.allegro.tech.hermes.test.helper.builder.TopicBuilder.randomTopic;
 
 public class MessageBufferLoadingTest extends IntegrationTest {
@@ -61,17 +64,17 @@ public class MessageBufferLoadingTest extends IntegrationTest {
         Topic topic = randomTopic("backupGroup", "uniqueTopic").build();
         operations.buildTopic(topic);
 
-        FrontendStarter frontend = new FrontendStarter(frontendPort, false);
-        frontend.overrideProperty(Configs.KAFKA_AUTHORIZATION_ENABLED, false);
-        frontend.overrideProperty(Configs.KAFKA_BROKER_LIST, kafkaClusterOne.getBootstrapServersForExternalClients());
-        frontend.overrideProperty(Configs.ZOOKEEPER_CONNECT_STRING, hermesZookeeperOne.getConnectionString());
-        frontend.overrideProperty(Configs.SCHEMA_REPOSITORY_SERVER_URL, schemaRegistry.getUrl());
+        FrontendStarter frontend = FrontendStarter.withCommonIntegrationTestConfig(frontendPort, false);
         frontend.overrideProperty(MESSAGES_LOCAL_STORAGE_DIRECTORY, backupStorageDir);
+        frontend.overrideProperty(KAFKA_BROKER_LIST, kafkaClusterOne.getBootstrapServersForExternalClients());
+        frontend.overrideProperty(ZOOKEEPER_CONNECTION_STRING, hermesZookeeperOne.getConnectionString());
+        frontend.overrideProperty(SCHEMA_REPOSITORY_SERVER_URL, schemaRegistry.getUrl());
+        frontend.overrideProperty(MESSAGES_LOCAL_STORAGE_ENABLED, true);
         frontend.start();
 
         try {
             //given
-            ChronicleMapMessageRepository backupRepository = createBackupRepository(backupStorageDir);
+            final ChronicleMapMessageRepository backupRepository = createBackupRepository(backupStorageDir);
 
             await().atMost(5, SECONDS).until(() ->
                     assertThat(publisher.publish(topic.getQualifiedName(), "message").getStatus())
@@ -102,12 +105,11 @@ public class MessageBufferLoadingTest extends IntegrationTest {
 
         remoteService.expectMessages("message");
 
-        FrontendStarter frontend = new FrontendStarter(Ports.nextAvailable(), false);
+        FrontendStarter frontend = FrontendStarter.withCommonIntegrationTestConfig(Ports.nextAvailable(), false);
         frontend.overrideProperty(MESSAGES_LOCAL_STORAGE_DIRECTORY, tempDirPath);
-        frontend.overrideProperty(Configs.KAFKA_AUTHORIZATION_ENABLED, false);
-        frontend.overrideProperty(Configs.KAFKA_BROKER_LIST, kafkaClusterOne.getBootstrapServersForExternalClients());
-        frontend.overrideProperty(Configs.ZOOKEEPER_CONNECT_STRING, hermesZookeeperOne.getConnectionString());
-        frontend.overrideProperty(Configs.SCHEMA_REPOSITORY_SERVER_URL, schemaRegistry.getUrl());
+        frontend.overrideProperty(KAFKA_BROKER_LIST, kafkaClusterOne.getBootstrapServersForExternalClients());
+        frontend.overrideProperty(ZOOKEEPER_CONNECTION_STRING, hermesZookeeperOne.getConnectionString());
+        frontend.overrideProperty(SCHEMA_REPOSITORY_SERVER_URL, schemaRegistry.getUrl());
 
         // when
         frontend.start();
@@ -119,13 +121,13 @@ public class MessageBufferLoadingTest extends IntegrationTest {
         frontend.stop();
     }
 
-    private File backupFileWithOneMessage(String tempDirPath, Topic topic) {
+    private void backupFileWithOneMessage(String tempDirPath, Topic topic) {
         File backup = new File(tempDirPath, "hermes-buffer-v3.dat");
 
         MessageRepository messageRepository = new ChronicleMapMessageRepository(backup, ENTRIES, AVERAGE_MESSAGE_SIZE);
-        JsonMessageContentWrapper contentWrapper = new JsonMessageContentWrapper(CONFIG_FACTORY, new ObjectMapper());
+        JsonMessageContentWrapper contentWrapper = new JsonMessageContentWrapper("message", "metadata", new ObjectMapper());
 
-        MessageContentWrapper wrapper = new MessageContentWrapper(contentWrapper, null,null, null, null, null, null);
+        CompositeMessageContentWrapper wrapper = new CompositeMessageContentWrapper(contentWrapper, null, null, null, null, null);
 
         String messageId = MessageIdGenerator.generate();
         long timestamp = now().toEpochMilli();
@@ -135,7 +137,6 @@ public class MessageBufferLoadingTest extends IntegrationTest {
         messageRepository.save(new JsonMessage(messageId, content, timestamp, null), topic);
         messageRepository.close();
 
-        return backup;
     }
 
     private ChronicleMapMessageRepository createBackupRepository(String storageDirPath) {

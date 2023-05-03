@@ -3,16 +3,12 @@ package pl.allegro.tech.hermes.frontend.producer.kafka;
 import org.apache.avro.Schema;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.Header;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
-import pl.allegro.tech.hermes.common.config.Configs;
-import pl.allegro.tech.hermes.common.kafka.KafkaTopic;
 import pl.allegro.tech.hermes.common.kafka.KafkaTopicName;
 import pl.allegro.tech.hermes.frontend.publishing.message.Message;
 import pl.allegro.tech.hermes.schema.CompiledSchema;
 import pl.allegro.tech.hermes.schema.SchemaId;
 import pl.allegro.tech.hermes.schema.SchemaVersion;
 
-import javax.inject.Inject;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -24,11 +20,10 @@ public class MessageToKafkaProducerRecordConverter {
     private final KafkaHeaderFactory kafkaHeaderFactory;
     private final boolean schemaIdHeaderEnabled;
 
-    @Inject
     public MessageToKafkaProducerRecordConverter(KafkaHeaderFactory kafkaHeaderFactory,
-                                                 ConfigFactory configFactory) {
+                                                 boolean schemaIdHeaderEnabled) {
         this.kafkaHeaderFactory = kafkaHeaderFactory;
-        this.schemaIdHeaderEnabled = configFactory.getBooleanProperty(Configs.SCHEMA_ID_HEADER_ENABLED);
+        this.schemaIdHeaderEnabled = schemaIdHeaderEnabled;
     }
 
     public ProducerRecord<byte[], byte[]> convertToProducerRecord(Message message, KafkaTopicName kafkaTopicName) {
@@ -37,7 +32,8 @@ public class MessageToKafkaProducerRecordConverter {
         Iterable<Header> headers = createRecordHeaders(message.getId(), message.getTimestamp(), schemaId, schemaVersion);
         byte[] partitionKey = ofNullable(message.getPartitionKey()).map(String::getBytes).orElse(null);
 
-        return new ProducerRecord<byte[], byte[]>(kafkaTopicName.asString(), null, partitionKey, message.getData(), headers);
+        return new ProducerRecord<>(kafkaTopicName.asString(), null, message.getTimestamp(),
+                partitionKey, message.getData(), headers);
     }
 
     private Optional<SchemaId> createSchemaId(Message message) {
@@ -48,7 +44,10 @@ public class MessageToKafkaProducerRecordConverter {
         return Optional.empty();
     }
 
-    private Iterable<Header> createRecordHeaders(String id, long timestamp, Optional<SchemaId> schemaId, Optional<SchemaVersion> schemaVersion) {
+    private Iterable<Header> createRecordHeaders(String id,
+                                                 long timestamp,
+                                                 Optional<SchemaId> schemaId,
+                                                 Optional<SchemaVersion> schemaVersion) {
         Stream<Optional<Header>> headers = Stream.of(
                 Optional.of(kafkaHeaderFactory.messageId(id)),
                 Optional.of(kafkaHeaderFactory.timestamp(timestamp)),

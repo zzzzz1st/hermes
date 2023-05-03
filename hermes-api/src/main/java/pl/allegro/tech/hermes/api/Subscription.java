@@ -4,12 +4,8 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import org.hibernate.validator.constraints.NotEmpty;
 import pl.allegro.tech.hermes.api.constraints.ValidContentType;
 
-import javax.validation.Valid;
-import javax.validation.constraints.NotNull;
-import javax.validation.constraints.Pattern;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,6 +13,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import javax.validation.Valid;
+import javax.validation.constraints.NotEmpty;
+import javax.validation.constraints.NotNull;
+import javax.validation.constraints.Pattern;
 
 import static pl.allegro.tech.hermes.api.constraints.Names.ALLOWED_NAME_REGEX;
 
@@ -24,64 +24,41 @@ import static pl.allegro.tech.hermes.api.constraints.Names.ALLOWED_NAME_REGEX;
 @JsonIgnoreProperties(value = {"createdAt", "modifiedAt"}, allowGetters = true)
 public class Subscription implements Anonymizable {
 
+    @NotNull
+    private final MonitoringDetails monitoringDetails;
+    private final SubscriptionName subscriptionName;
     @Valid
     @NotNull
     private TopicName topicName;
-
     @NotEmpty
     @Pattern(regexp = ALLOWED_NAME_REGEX)
     private String name;
-
     private State state = State.PENDING;
-
     @NotNull
     @Valid
     private EndpointAddress endpoint;
-
     @NotNull
     private ContentType contentType = ContentType.JSON;
-
     @NotNull
     private String description;
-
     @Valid
     private SubscriptionPolicy serialSubscriptionPolicy;
-
     @Valid
     private BatchSubscriptionPolicy batchSubscriptionPolicy;
-
     /**
      * Use trackingMode field instead.
      */
     @Deprecated
     private boolean trackingEnabled = false;
-
     private TrackingMode trackingMode = TrackingMode.TRACKING_OFF;
-
     private boolean http2Enabled = false;
-
     @Valid
     @NotNull
     private OwnerId owner;
-
-    /**
-     * Use owner field instead. This field remains deprecated
-     * for a while for migration purposes.
-     */
-    @Deprecated
-    private String supportTeam;
-
-    @NotNull
-    private final MonitoringDetails monitoringDetails;
-
     @NotNull
     private DeliveryType deliveryType = DeliveryType.SERIAL;
-
     @NotNull
     private SubscriptionMode mode = SubscriptionMode.ANYCAST;
-
-    private final SubscriptionName subscriptionName;
-
     private List<MessageFilterSpecification> filters = new ArrayList<>();
 
     private List<Header> headers;
@@ -93,13 +70,11 @@ public class Subscription implements Anonymizable {
 
     private boolean subscriptionIdentityHeadersEnabled;
 
+    private boolean autoDeleteWithTopicEnabled;
+
     private Instant createdAt;
 
     private Instant modifiedAt;
-
-    public enum State {
-        PENDING, ACTIVE, SUSPENDED
-    }
 
     private Subscription(TopicName topicName,
                          String name,
@@ -110,7 +85,6 @@ public class Subscription implements Anonymizable {
                          boolean trackingEnabled,
                          TrackingMode trackingMode,
                          OwnerId owner,
-                         String supportTeam,
                          MonitoringDetails monitoringDetails,
                          ContentType contentType,
                          DeliveryType deliveryType,
@@ -120,7 +94,8 @@ public class Subscription implements Anonymizable {
                          EndpointAddressResolverMetadata endpointAddressResolverMetadata,
                          SubscriptionOAuthPolicy oAuthPolicy,
                          boolean http2Enabled,
-                         boolean subscriptionIdentityHeadersEnabled) {
+                         boolean subscriptionIdentityHeadersEnabled,
+                         boolean autoDeleteWithTopicEnabled) {
         this.topicName = topicName;
         this.name = name;
         this.endpoint = endpoint;
@@ -129,7 +104,6 @@ public class Subscription implements Anonymizable {
         this.trackingEnabled = trackingEnabled;
         this.trackingMode = trackingMode;
         this.owner = owner;
-        this.supportTeam = supportTeam;
         this.monitoringDetails = monitoringDetails == null ? MonitoringDetails.EMPTY : monitoringDetails;
         this.contentType = contentType == null ? ContentType.JSON : contentType;
         this.deliveryType = deliveryType;
@@ -143,6 +117,7 @@ public class Subscription implements Anonymizable {
         this.endpointAddressResolverMetadata = endpointAddressResolverMetadata;
         this.oAuthPolicy = oAuthPolicy;
         this.subscriptionIdentityHeadersEnabled = subscriptionIdentityHeadersEnabled;
+        this.autoDeleteWithTopicEnabled = autoDeleteWithTopicEnabled;
     }
 
     public static Subscription createSerialSubscription(TopicName topicName,
@@ -154,7 +129,6 @@ public class Subscription implements Anonymizable {
                                                         boolean trackingEnabled,
                                                         TrackingMode trackingMode,
                                                         OwnerId owner,
-                                                        String supportTeam,
                                                         MonitoringDetails monitoringDetails,
                                                         ContentType contentType,
                                                         List<MessageFilterSpecification> filters,
@@ -163,10 +137,11 @@ public class Subscription implements Anonymizable {
                                                         EndpointAddressResolverMetadata endpointAddressResolverMetadata,
                                                         SubscriptionOAuthPolicy oAuthPolicy,
                                                         boolean http2Enabled,
-                                                        boolean subscriptionIdentityHeadersEnabled) {
+                                                        boolean subscriptionIdentityHeadersEnabled,
+                                                        boolean autoDeleteWithTopicEnabled) {
         return new Subscription(topicName, name, endpoint, state, description, subscriptionPolicy, trackingEnabled, trackingMode,
-                owner, supportTeam, monitoringDetails, contentType, DeliveryType.SERIAL, filters, mode, headers,
-                endpointAddressResolverMetadata, oAuthPolicy, http2Enabled, subscriptionIdentityHeadersEnabled);
+                owner, monitoringDetails, contentType, DeliveryType.SERIAL, filters, mode, headers,
+                endpointAddressResolverMetadata, oAuthPolicy, http2Enabled, subscriptionIdentityHeadersEnabled, autoDeleteWithTopicEnabled);
     }
 
     public static Subscription createBatchSubscription(TopicName topicName,
@@ -178,7 +153,6 @@ public class Subscription implements Anonymizable {
                                                        boolean trackingEnabled,
                                                        TrackingMode trackingMode,
                                                        OwnerId owner,
-                                                       String supportTeam,
                                                        MonitoringDetails monitoringDetails,
                                                        ContentType contentType,
                                                        List<MessageFilterSpecification> filters,
@@ -186,10 +160,11 @@ public class Subscription implements Anonymizable {
                                                        EndpointAddressResolverMetadata endpointAddressResolverMetadata,
                                                        SubscriptionOAuthPolicy oAuthPolicy,
                                                        boolean http2Enabled,
-                                                       boolean subscriptionIdentityHeadersEnabled) {
+                                                       boolean subscriptionIdentityHeadersEnabled,
+                                                       boolean autoDeleteWithTopicEnabled) {
         return new Subscription(topicName, name, endpoint, state, description, subscriptionPolicy, trackingEnabled, trackingMode,
-                owner, supportTeam, monitoringDetails, contentType, DeliveryType.BATCH, filters, SubscriptionMode.ANYCAST, headers,
-                endpointAddressResolverMetadata, oAuthPolicy, http2Enabled, subscriptionIdentityHeadersEnabled);
+                owner, monitoringDetails, contentType, DeliveryType.BATCH, filters, SubscriptionMode.ANYCAST, headers,
+                endpointAddressResolverMetadata, oAuthPolicy, http2Enabled, subscriptionIdentityHeadersEnabled, autoDeleteWithTopicEnabled);
     }
 
     @JsonCreator
@@ -203,7 +178,6 @@ public class Subscription implements Anonymizable {
             @JsonProperty("trackingEnabled") boolean trackingEnabled,
             @JsonProperty("trackingMode") String trackingMode,
             @JsonProperty("owner") OwnerId owner,
-            @JsonProperty("supportTeam") String supportTeam,
             @JsonProperty("monitoringDetails") MonitoringDetails monitoringDetails,
             @JsonProperty("contentType") ContentType contentType,
             @JsonProperty("deliveryType") DeliveryType deliveryType,
@@ -213,7 +187,8 @@ public class Subscription implements Anonymizable {
             @JsonProperty("endpointAddressResolverMetadata") EndpointAddressResolverMetadata endpointAddressResolverMetadata,
             @JsonProperty("oAuthPolicy") SubscriptionOAuthPolicy oAuthPolicy,
             @JsonProperty("http2Enabled") boolean http2Enabled,
-            @JsonProperty("subscriptionIdentityHeadersEnabled") boolean subscriptionIdentityHeadersEnabled) {
+            @JsonProperty("subscriptionIdentityHeadersEnabled") boolean subscriptionIdentityHeadersEnabled,
+            @JsonProperty("autoDeleteWithTopicEnabled") boolean autoDeleteWithTopicEnabled) {
 
         DeliveryType validDeliveryType = deliveryType == null ? DeliveryType.SERIAL : deliveryType;
         SubscriptionMode subscriptionMode = mode == null ? SubscriptionMode.ANYCAST : mode;
@@ -229,12 +204,12 @@ public class Subscription implements Anonymizable {
                 endpoint,
                 state,
                 description,
-                validDeliveryType == DeliveryType.SERIAL ?
-                        SubscriptionPolicy.create(validSubscriptionPolicy) : BatchSubscriptionPolicy.create(validSubscriptionPolicy),
+                validDeliveryType == DeliveryType.SERIAL
+                        ? SubscriptionPolicy.create(validSubscriptionPolicy)
+                        : BatchSubscriptionPolicy.create(validSubscriptionPolicy),
                 validTrackingEnabled,
                 validTrackingMode,
                 owner,
-                supportTeam,
                 monitoringDetails,
                 contentType,
                 validDeliveryType,
@@ -244,14 +219,15 @@ public class Subscription implements Anonymizable {
                 endpointAddressResolverMetadata == null ? EndpointAddressResolverMetadata.empty() : endpointAddressResolverMetadata,
                 oAuthPolicy,
                 http2Enabled,
-                subscriptionIdentityHeadersEnabled
+                subscriptionIdentityHeadersEnabled,
+                autoDeleteWithTopicEnabled
         );
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(endpoint, topicName, name, description, serialSubscriptionPolicy, batchSubscriptionPolicy,
-                trackingEnabled, trackingMode, owner, supportTeam, monitoringDetails, contentType, filters, mode, headers,
+                trackingEnabled, trackingMode, owner, monitoringDetails, contentType, filters, mode, headers,
                 endpointAddressResolverMetadata, oAuthPolicy, http2Enabled, subscriptionIdentityHeadersEnabled);
     }
 
@@ -274,7 +250,6 @@ public class Subscription implements Anonymizable {
                 && Objects.equals(this.trackingEnabled, other.trackingEnabled)
                 && Objects.equals(this.trackingMode, other.trackingMode)
                 && Objects.equals(this.owner, other.owner)
-                && Objects.equals(this.supportTeam, other.supportTeam)
                 && Objects.equals(this.monitoringDetails, other.monitoringDetails)
                 && Objects.equals(this.contentType, other.contentType)
                 && Objects.equals(this.filters, other.filters)
@@ -283,7 +258,8 @@ public class Subscription implements Anonymizable {
                 && Objects.equals(this.endpointAddressResolverMetadata, other.endpointAddressResolverMetadata)
                 && Objects.equals(this.http2Enabled, other.http2Enabled)
                 && Objects.equals(this.oAuthPolicy, other.oAuthPolicy)
-                && Objects.equals(this.subscriptionIdentityHeadersEnabled, other.subscriptionIdentityHeadersEnabled);
+                && Objects.equals(this.subscriptionIdentityHeadersEnabled, other.subscriptionIdentityHeadersEnabled)
+                && Objects.equals(this.autoDeleteWithTopicEnabled, other.autoDeleteWithTopicEnabled);
     }
 
     @JsonIgnore
@@ -311,10 +287,6 @@ public class Subscription implements Anonymizable {
 
     public String getDescription() {
         return description;
-    }
-
-    public void setSerialSubscriptionPolicy(SubscriptionPolicy serialSubscriptionPolicy) {
-        this.serialSubscriptionPolicy = serialSubscriptionPolicy;
     }
 
     public State getState() {
@@ -346,14 +318,6 @@ public class Subscription implements Anonymizable {
 
     public OwnerId getOwner() {
         return owner;
-    }
-
-    /**
-     * Use getOwner() instead.
-     */
-    @Deprecated
-    public String getSupportTeam() {
-        return supportTeam;
     }
 
     public MonitoringDetails getMonitoringDetails() {
@@ -393,6 +357,10 @@ public class Subscription implements Anonymizable {
     @JsonIgnore
     public SubscriptionPolicy getSerialSubscriptionPolicy() {
         return serialSubscriptionPolicy;
+    }
+
+    public void setSerialSubscriptionPolicy(SubscriptionPolicy serialSubscriptionPolicy) {
+        this.serialSubscriptionPolicy = serialSubscriptionPolicy;
     }
 
     @JsonIgnore
@@ -443,6 +411,10 @@ public class Subscription implements Anonymizable {
         this.modifiedAt = Instant.ofEpochMilli(modifiedAt);
     }
 
+    public boolean isAutoDeleteWithTopicEnabled() {
+        return autoDeleteWithTopicEnabled;
+    }
+
     @Override
     public Subscription anonymize() {
         if (getEndpoint() != null && getEndpoint().containsCredentials() || hasOAuthPolicy()) {
@@ -456,7 +428,6 @@ public class Subscription implements Anonymizable {
                     trackingEnabled,
                     trackingMode,
                     owner,
-                    supportTeam,
                     monitoringDetails,
                     contentType,
                     deliveryType,
@@ -466,7 +437,8 @@ public class Subscription implements Anonymizable {
                     endpointAddressResolverMetadata,
                     oAuthPolicy != null ? oAuthPolicy.anonymize() : null,
                     http2Enabled,
-                    subscriptionIdentityHeadersEnabled
+                    subscriptionIdentityHeadersEnabled,
+                    autoDeleteWithTopicEnabled
             );
         }
         return this;
@@ -475,5 +447,9 @@ public class Subscription implements Anonymizable {
     @Override
     public String toString() {
         return "Subscription(" + getQualifiedName() + ")";
+    }
+
+    public enum State {
+        PENDING, ACTIVE, SUSPENDED
     }
 }

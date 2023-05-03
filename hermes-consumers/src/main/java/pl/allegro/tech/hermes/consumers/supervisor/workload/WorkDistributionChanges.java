@@ -1,29 +1,44 @@
 package pl.allegro.tech.hermes.consumers.supervisor.workload;
 
-import static java.lang.String.format;
+import com.google.common.collect.Sets;
+import pl.allegro.tech.hermes.api.SubscriptionName;
+
+import java.util.Set;
+import java.util.stream.Stream;
+
+import static java.util.stream.Collectors.toSet;
 
 public class WorkDistributionChanges {
 
-    static final WorkDistributionChanges NO_CHANGES = new WorkDistributionChanges(0, 0);
+    private final SubscriptionAssignmentView deletions;
+    private final SubscriptionAssignmentView additions;
+    private final Set<String> modifiedConsumerNodes;
 
-    private final int assignmentsDeleted;
-    private final int assignmentsCreated;
-
-    WorkDistributionChanges(int assignmentsDeleted, int assignmentsCreated) {
-        this.assignmentsDeleted = assignmentsDeleted;
-        this.assignmentsCreated = assignmentsCreated;
+    WorkDistributionChanges(SubscriptionAssignmentView deletions, SubscriptionAssignmentView additions) {
+        this.deletions = deletions;
+        this.additions = additions;
+        this.modifiedConsumerNodes = Sets.union(
+                deletions.getConsumerNodes(),
+                additions.getConsumerNodes()
+        );
     }
 
-    public int getDeletedAssignmentsCount() {
-        return assignmentsDeleted;
+    int getDeletedAssignmentsCount() {
+        return deletions.getAllAssignments().size();
     }
 
-    public int getCreatedAssignmentsCount() {
-        return assignmentsCreated;
+    int getCreatedAssignmentsCount() {
+        return additions.getAllAssignments().size();
     }
 
-    public String toString() {
-        return format("assignments_created=%d, assignments_deleted=%d",
-                assignmentsCreated, assignmentsDeleted);
+    Set<String> getModifiedConsumerNodes() {
+        return modifiedConsumerNodes;
+    }
+
+    public Set<SubscriptionName> getRebalancedSubscriptions() {
+        return Stream.concat(
+                additions.getSubscriptions().stream(),
+                deletions.getSubscriptions().stream()
+        ).collect(toSet());
     }
 }

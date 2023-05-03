@@ -15,9 +15,9 @@ import pl.allegro.tech.hermes.test.helper.message.TestMessage;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import javax.ws.rs.core.Response;
 
 import static java.util.Arrays.stream;
-import static javax.ws.rs.core.Response.Status.CREATED;
 import static pl.allegro.tech.hermes.api.BatchSubscriptionPolicy.Builder.batchSubscriptionPolicy;
 import static pl.allegro.tech.hermes.api.TopicWithSchema.topicWithSchema;
 import static pl.allegro.tech.hermes.integration.test.HermesAssertions.assertThat;
@@ -207,8 +207,30 @@ public class BatchDeliveryTest extends IntegrationTest {
         });
     }
 
+    @Test
+    public void shouldTimeoutRequestAsAWhole() {
+        //given
+        Topic topic = operations.buildTopic("timeoutTest", "topic");
+        operations.createBatchSubscription(topic, remoteService.getUrl(), buildBatchPolicy()
+                .withBatchSize(1)
+                .withBatchTime(1)
+                .withBatchVolume(1024)
+                .withRequestTimeout(1000)
+                .build());
+
+        remoteService.slowThenFastMessage(SINGLE_MESSAGE.body(), 10, 5000); // response chunk every 500ms, total 5s
+
+        // when
+        publish(topic, SINGLE_MESSAGE);
+
+        // then
+        // first request is retried because of timeout (with socket / idle timeout only, the request wouldn't be timed out)
+        remoteService.waitUntilReceived(5, 2);
+        assertThat(remoteService.getLastReceivedRequest().getHeader("Hermes-Retry-Count")).isEqualTo("1");
+    }
+
     private void publish(Topic topic, TestMessage m) {
-        assertThat(publisher.publish(topic.getQualifiedName(), m.body())).hasStatus(CREATED);
+        assertThat(publisher.publish(topic.getQualifiedName(), m.body())).hasStatusFamily(Response.Status.Family.SUCCESSFUL);
     }
 
     private void expectSingleBatch(TestMessage... expectedContents) {

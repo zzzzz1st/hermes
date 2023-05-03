@@ -1,6 +1,5 @@
 package pl.allegro.tech.hermes.frontend.producer.kafka;
 
-import com.netflix.config.DynamicPropertyFactory;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
@@ -11,10 +10,12 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
 import pl.allegro.tech.hermes.api.Topic;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
 import pl.allegro.tech.hermes.common.kafka.KafkaNamesMapper;
 import pl.allegro.tech.hermes.common.kafka.NamespaceKafkaNamesMapper;
 import pl.allegro.tech.hermes.common.metric.HermesMetrics;
+import pl.allegro.tech.hermes.frontend.config.KafkaHeaderNameProperties;
+import pl.allegro.tech.hermes.frontend.config.KafkaProducerProperties;
+import pl.allegro.tech.hermes.frontend.config.SchemaProperties;
 import pl.allegro.tech.hermes.frontend.metric.CachedTopic;
 import pl.allegro.tech.hermes.frontend.publishing.PublishingCallback;
 import pl.allegro.tech.hermes.frontend.publishing.message.JsonMessage;
@@ -38,15 +39,17 @@ public class KafkaBrokerMessageProducerTest {
     private static final byte[] CONTENT = "{\"data\":\"json\"}".getBytes(UTF_8);
     private static final Message MESSAGE = new JsonMessage(MESSAGE_ID, CONTENT, TIMESTAMP, PARTITION_KEY);
 
-    private ByteArraySerializer serializer = new ByteArraySerializer();
-    private MockProducer<byte[], byte[]> leaderConfirmsProducer = new MockProducer<>(true, serializer, serializer);
-    private MockProducer<byte[], byte[]> everyoneConfirmProducer = new MockProducer<>(true, serializer, serializer);
-    private ConfigFactory configFactory = new ConfigFactory(DynamicPropertyFactory.getInstance());
-    private Producers producers = new Producers(leaderConfirmsProducer, everyoneConfirmProducer, configFactory);
+    private final ByteArraySerializer serializer = new ByteArraySerializer();
+    private final MockProducer<byte[], byte[]> leaderConfirmsProducer = new MockProducer<>(true, serializer, serializer);
+    private final MockProducer<byte[], byte[]> everyoneConfirmProducer = new MockProducer<>(true, serializer, serializer);
+    private final KafkaHeaderNameProperties kafkaHeaderNameProperties = new KafkaHeaderNameProperties();
+    private final KafkaProducerProperties kafkaProducerProperties = new KafkaProducerProperties();
+    private final Producers producers =
+        new Producers(leaderConfirmsProducer, everyoneConfirmProducer, kafkaProducerProperties.isReportNodeMetricsEnabled());
 
     private KafkaBrokerMessageProducer producer;
-    private KafkaNamesMapper kafkaNamesMapper = new NamespaceKafkaNamesMapper("ns", "_");
-    private KafkaHeaderFactory kafkaHeaderFactory = new KafkaHeaderFactory(configFactory);
+    private final KafkaNamesMapper kafkaNamesMapper = new NamespaceKafkaNamesMapper("ns", "_");
+    private final KafkaHeaderFactory kafkaHeaderFactory = new KafkaHeaderFactory(kafkaHeaderNameProperties);
 
     @Mock
     private HermesMetrics hermesMetrics;
@@ -56,10 +59,13 @@ public class KafkaBrokerMessageProducerTest {
 
     private CachedTopic cachedTopic;
 
+    private final SchemaProperties schemaProperties = new SchemaProperties();
+
     @Before
     public void before() {
         cachedTopic = new CachedTopic(TOPIC, hermesMetrics, kafkaNamesMapper.toKafkaTopics(TOPIC));
-        MessageToKafkaProducerRecordConverter messageConverter = new MessageToKafkaProducerRecordConverter(kafkaHeaderFactory, configFactory);
+        MessageToKafkaProducerRecordConverter messageConverter =
+            new MessageToKafkaProducerRecordConverter(kafkaHeaderFactory, schemaProperties.isIdHeaderEnabled());
         producer = new KafkaBrokerMessageProducer(producers, kafkaTopicMetadataFetcher, hermesMetrics, messageConverter);
     }
 
@@ -70,7 +76,7 @@ public class KafkaBrokerMessageProducerTest {
     }
 
     @Test
-    public void shouldPublishOnTopicUsingKafkaTopicName() throws InterruptedException {
+    public void shouldPublishOnTopicUsingKafkaTopicName() {
         //when
         producer.send(MESSAGE, cachedTopic, new DoNothing());
 
@@ -94,7 +100,7 @@ public class KafkaBrokerMessageProducerTest {
     }
 
     @Test
-    public void shouldCallCallbackOnSend() throws InterruptedException {
+    public void shouldCallCallbackOnSend() {
         //given
         final AtomicBoolean callbackCalled = new AtomicBoolean(false);
 

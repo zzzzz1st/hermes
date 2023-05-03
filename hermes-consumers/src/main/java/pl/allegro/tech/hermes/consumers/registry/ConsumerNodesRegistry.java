@@ -41,7 +41,7 @@ public class ConsumerNodesRegistry extends PathChildrenCache implements PathChil
             ExecutorService executorService,
             ConsumerNodesRegistryPaths registryPaths,
             String consumerNodeId,
-            int deathOfConsumerAfterSeconds,
+            long deathOfConsumerAfterSeconds,
             Clock clock
     ) {
         super(curatorClient, registryPaths.nodesPath(), true, false, executorService);
@@ -74,6 +74,9 @@ public class ConsumerNodesRegistry extends PathChildrenCache implements PathChil
                 if (!isRegistered(consumerNodeId)) {
                     registerConsumerNode();
                 }
+                break;
+            default:
+                // noop
                 break;
         }
     }

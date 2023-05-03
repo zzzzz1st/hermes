@@ -8,10 +8,10 @@ internal security model which is described here: [Undertow Security](http://unde
 
 Authentication has to be enabled using following configuration:
 
-Option                          | Description                                         | Options                       | Default value
-------------------------------- | --------------------------------------------------- | ----------------------------- | -------------
-frontend.authentication.enabled | enable authentication handler                       | true, false                   | false
-frontend.authentication.mode    | in which circumstances perform authentication       | constraint_driven, pro_active | constraint_driven
+Option                                   | Description                                         | Options                       | Default value
+---------------------------------------- | --------------------------------------------------- | ----------------------------- | -------------
+frontend.handlers.authentication.enabled | enable authentication handler                       | true, false                   | false
+frontend.handlers.authentication.mode    | in which circumstances perform authentication       | constraint_driven, pro_active | constraint_driven
 
 More about authentication mode can be read here: [AuthenticationMode](http://undertow.io/javadoc/1.3.x/io/undertow/security/api/AuthenticationMode.html)
 
@@ -29,16 +29,38 @@ Worth mentioning is that authenticated account has to contain role `Roles.PUBLIS
 without evaluating topic specific authorisation configuration. This behavior can be used for instance to reject requests from
 development environment on production.
 
-Below you can see naive implementation of authentication via `Authorization` header used in our integration tests. 
+Below you can see naive implementation of authentication via `Authorization` header used in our integration tests.
 
 ```java 
-Predicate<HttpServerExchange> isAuthenticationRequiredPredicate = exchange -> true;
-AuthenticationMechanism basicAuth = new BasicAuthenticationMechanism("basicAuthRealm");
-builder.withAuthenticationConfiguration(new AuthenticationConfiguration(
-                                            isAuthenticationRequiredPredicate,
-                                            Arrays.asList(basicAuth),
-                                            new SingleUserAwareIdentityManager("John", "12345")                                          
-                                        ));
+@Configuration
+@PropertySource("classpath:application-auth.properties")
+public class AuthConfiguration {
+
+    @Value("${auth.username}")
+    private String username;
+
+    @Value("${auth.password}")
+    private String password;
+
+    @Bean
+    @Profile("authRequired")
+    public AuthenticationConfiguration requiredAuthenticationConfiguration() {
+        return getAuthConfig(true);
+    }
+
+    @Bean
+    @Profile("authNonRequired")
+    public AuthenticationConfiguration notRequiredAuthenticationConfiguration() {
+        return getAuthConfig(false);
+    }
+
+    private AuthenticationConfiguration getAuthConfig (boolean isAuthenticationRequired) {
+        return new AuthenticationConfiguration(
+                exchange -> isAuthenticationRequired,
+                Lists.newArrayList(new BasicAuthenticationMechanism("basicAuthRealm")),
+                new SingleUserAwareIdentityManager(username, password));
+    }
+}
 ```
 
 ```java

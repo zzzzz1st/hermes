@@ -1,28 +1,21 @@
 package pl.allegro.tech.hermes.integration.helper;
 
-import static com.jayway.awaitility.Awaitility.await;
-
 import com.google.common.collect.Iterables;
 import com.jayway.awaitility.Duration;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.Callable;
-import javax.jms.BytesMessage;
-import javax.jms.ConnectionFactory;
-import javax.jms.JMSContext;
-import javax.jms.JMSException;
-import javax.jms.Message;
-import javax.jms.MessageListener;
-import javax.jms.Topic;
-
 import org.hornetq.api.core.TransportConfiguration;
 import org.hornetq.api.jms.HornetQJMSClient;
 import org.hornetq.api.jms.JMSFactoryType;
 import org.hornetq.core.remoting.impl.netty.NettyConnectorFactory;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
-import pl.allegro.tech.hermes.common.config.Configs;
 import pl.allegro.tech.hermes.test.helper.message.TestMessage;
+
+import java.util.ArrayList;
+import java.util.List;
+import javax.jms.ConnectionFactory;
+import javax.jms.JMSContext;
+import javax.jms.Message;
+import javax.jms.Topic;
+
+import static com.jayway.awaitility.Awaitility.await;
 
 public class RemoteJmsEndpoint {
 
@@ -43,7 +36,7 @@ public class RemoteJmsEndpoint {
         JMSContext jmsContext = connectionFactory.createContext();
 
         Topic topic = jmsContext.createTopic(topicName);
-        jmsContext.createConsumer(topic).setMessageListener(message -> receivedMessages.add(message));
+        jmsContext.createConsumer(topic).setMessageListener(receivedMessages::add);
 
         return jmsContext;
     }

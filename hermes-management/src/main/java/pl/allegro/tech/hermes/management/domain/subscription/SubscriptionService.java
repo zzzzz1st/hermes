@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import pl.allegro.tech.hermes.api.MessageTrace;
 import pl.allegro.tech.hermes.api.OwnerId;
 import pl.allegro.tech.hermes.api.PatchData;
+import pl.allegro.tech.hermes.api.PersistentSubscriptionMetrics;
 import pl.allegro.tech.hermes.api.Query;
 import pl.allegro.tech.hermes.api.SentMessageTrace;
 import pl.allegro.tech.hermes.api.Subscription;
@@ -13,22 +14,19 @@ import pl.allegro.tech.hermes.api.SubscriptionHealth;
 import pl.allegro.tech.hermes.api.SubscriptionMetrics;
 import pl.allegro.tech.hermes.api.SubscriptionName;
 import pl.allegro.tech.hermes.api.SubscriptionNameWithMetrics;
-import pl.allegro.tech.hermes.api.PersistentSubscriptionMetrics;
 import pl.allegro.tech.hermes.api.Topic;
 import pl.allegro.tech.hermes.api.TopicMetrics;
 import pl.allegro.tech.hermes.api.TopicName;
 import pl.allegro.tech.hermes.api.UnhealthySubscription;
 import pl.allegro.tech.hermes.api.helpers.Patch;
-import pl.allegro.tech.hermes.common.message.undelivered.UndeliveredMessageLog;
+import pl.allegro.tech.hermes.common.message.undelivered.LastUndeliveredMessageReader;
 import pl.allegro.tech.hermes.domain.subscription.SubscriptionRepository;
-import pl.allegro.tech.hermes.management.api.auth.CreatorRights;
 import pl.allegro.tech.hermes.management.domain.Auditor;
 import pl.allegro.tech.hermes.management.domain.auth.RequestUser;
 import pl.allegro.tech.hermes.management.domain.dc.DatacenterBoundRepositoryHolder;
 import pl.allegro.tech.hermes.management.domain.dc.MultiDatacenterRepositoryCommandExecutor;
 import pl.allegro.tech.hermes.management.domain.dc.RepositoryManager;
 import pl.allegro.tech.hermes.management.domain.subscription.commands.CreateSubscriptionRepositoryCommand;
-import pl.allegro.tech.hermes.management.domain.subscription.commands.RemoveSubscriptionRepositoryCommand;
 import pl.allegro.tech.hermes.management.domain.subscription.commands.UpdateSubscriptionRepositoryCommand;
 import pl.allegro.tech.hermes.management.domain.subscription.health.SubscriptionHealthChecker;
 import pl.allegro.tech.hermes.management.domain.subscription.validator.SubscriptionValidator;
@@ -73,6 +71,7 @@ public class SubscriptionService {
     private final RepositoryManager repositoryManager;
     private final long subscriptionHealthCheckTimeoutMillis;
     private final ExecutorService subscriptionHealthCheckExecutorService;
+    private final SubscriptionRemover subscriptionRemover;
 
 
     public SubscriptionService(SubscriptionRepository subscriptionRepository,
@@ -87,7 +86,8 @@ public class SubscriptionService {
                                MultiDCAwareService multiDCAwareService,
                                RepositoryManager repositoryManager,
                                ExecutorService unhealthyGetExecutorService,
-                               long unhealthyGetTimeoutMillis) {
+                               long unhealthyGetTimeoutMillis,
+                               SubscriptionRemover subscriptionRemover) {
         this.subscriptionRepository = subscriptionRepository;
         this.subscriptionOwnerCache = subscriptionOwnerCache;
         this.topicService = topicService;
@@ -101,6 +101,7 @@ public class SubscriptionService {
         this.repositoryManager = repositoryManager;
         this.subscriptionHealthCheckExecutorService = unhealthyGetExecutorService;
         this.subscriptionHealthCheckTimeoutMillis = unhealthyGetTimeoutMillis;
+        this.subscriptionRemover = subscriptionRemover;
     }
 
     public List<String> listSubscriptionNames(TopicName topicName) {
@@ -124,9 +125,9 @@ public class SubscriptionService {
         return subscriptionRepository.listSubscriptions(topicName);
     }
 
-    public void createSubscription(Subscription subscription, RequestUser createdBy, CreatorRights creatorRights, String qualifiedTopicName) {
+    public void createSubscription(Subscription subscription, RequestUser createdBy, String qualifiedTopicName) {
         auditor.beforeObjectCreation(createdBy.getUsername(), subscription);
-        subscriptionValidator.checkCreation(subscription, creatorRights);
+        subscriptionValidator.checkCreation(subscription, createdBy);
 
         Topic topic = topicService.getTopicDetails(fromQualifiedName(qualifiedTopicName));
         multiDCAwareService.createConsumerGroups(topic, subscription);
@@ -141,6 +142,11 @@ public class SubscriptionService {
                 .anonymize();
         subscription.setState(getEffectiveState(topicName, subscriptionName));
         return subscription;
+    }
+
+    private CompletableFuture<List<Subscription>> getSubscriptionDetails(Collection<SubscriptionName> subscriptionNames) {
+        return CompletableFuture.supplyAsync(() ->
+                subscriptionRepository.getSubscriptionDetails(subscriptionNames), subscriptionHealthCheckExecutorService);
     }
 
     private Subscription.State getEffectiveState(TopicName topicName, String subscriptionName) {
@@ -177,24 +183,21 @@ public class SubscriptionService {
     }
 
     public void removeSubscription(TopicName topicName, String subscriptionName, RequestUser removedBy) {
-        auditor.beforeObjectRemoval(removedBy.getUsername(), Subscription.class.getSimpleName(), subscriptionName);
-        Subscription subscription = subscriptionRepository.getSubscriptionDetails(topicName, subscriptionName);
-        multiDcExecutor.executeByUser(new RemoveSubscriptionRepositoryCommand(topicName, subscriptionName), removedBy);
-        auditor.objectRemoved(removedBy.getUsername(), subscription);
-        subscriptionOwnerCache.onRemovedSubscription(subscriptionName, topicName);
+        subscriptionRemover.removeSubscription(topicName, subscriptionName, removedBy);
     }
 
     public void updateSubscription(TopicName topicName,
                                    String subscriptionName,
                                    PatchData patch,
                                    RequestUser modifiedBy) {
-        auditor.beforeObjectUpdate(modifiedBy.getUsername(), Subscription.class.getSimpleName(), new SubscriptionName(subscriptionName, topicName), patch);
+        auditor.beforeObjectUpdate(modifiedBy.getUsername(), Subscription.class.getSimpleName(),
+                new SubscriptionName(subscriptionName, topicName), patch);
 
         Subscription retrieved = subscriptionRepository.getSubscriptionDetails(topicName, subscriptionName);
         Subscription.State oldState = retrieved.getState();
         Subscription updated = Patch.apply(retrieved, patch);
         revertStateIfChangedToPending(updated, oldState);
-        subscriptionValidator.checkModification(updated);
+        subscriptionValidator.checkModification(updated, modifiedBy, retrieved);
         subscriptionOwnerCache.onUpdatedSubscription(retrieved, updated);
 
         if (!retrieved.equals(updated)) {
@@ -212,7 +215,11 @@ public class SubscriptionService {
     public void updateSubscriptionState(TopicName topicName, String subscriptionName, Subscription.State state, RequestUser modifiedBy) {
         if (state != Subscription.State.PENDING) {
             PatchData patchData = PatchData.patchData().set("state", state).build();
-            auditor.beforeObjectUpdate(modifiedBy.getUsername(), Subscription.class.getSimpleName(), new SubscriptionName(subscriptionName, topicName), patchData);
+            auditor.beforeObjectUpdate(
+                    modifiedBy.getUsername(),
+                    Subscription.class.getSimpleName(),
+                    new SubscriptionName(subscriptionName, topicName),
+                    patchData);
             Subscription retrieved = subscriptionRepository.getSubscriptionDetails(topicName, subscriptionName);
             if (!retrieved.getState().equals(state)) {
                 Subscription updated = Patch.apply(retrieved, patchData);
@@ -242,10 +249,10 @@ public class SubscriptionService {
     }
 
     public Optional<SentMessageTrace> getLatestUndeliveredMessage(TopicName topicName, String subscriptionName) {
-        List<DatacenterBoundRepositoryHolder<UndeliveredMessageLog>> holders =
-                repositoryManager.getRepositories(UndeliveredMessageLog.class);
+        List<DatacenterBoundRepositoryHolder<LastUndeliveredMessageReader>> holders =
+                repositoryManager.getRepositories(LastUndeliveredMessageReader.class);
         List<SentMessageTrace> traces = new ArrayList<>();
-        for (DatacenterBoundRepositoryHolder<UndeliveredMessageLog> holder : holders) {
+        for (DatacenterBoundRepositoryHolder<LastUndeliveredMessageReader> holder : holders) {
             try {
                 holder.getRepository().last(topicName, subscriptionName).ifPresent(traces::add);
             } catch (Exception e) {
@@ -337,12 +344,10 @@ public class SubscriptionService {
         return CompletableFuture.supplyAsync(() -> getForOwnerId(ownerId));
     }
 
-    private CompletableFuture<List<Subscription>> getSubscriptionDetails(Collection<SubscriptionName> subscriptionNames) {
-        return CompletableFuture.supplyAsync(() -> subscriptionRepository.getSubscriptionDetails(subscriptionNames), subscriptionHealthCheckExecutorService);
-    }
-
-    private List<CompletableFuture<UnhealthySubscription>> filterSubscriptions(Collection<Subscription> subscriptions, boolean respectMonitoringSeverity,
-                                                                               List<String> subscriptionNames, List<String> qualifiedTopicNames) {
+    private List<CompletableFuture<UnhealthySubscription>> filterSubscriptions(Collection<Subscription> subscriptions,
+                                                                               boolean respectMonitoringSeverity,
+                                                                               List<String> subscriptionNames,
+                                                                               List<String> qualifiedTopicNames) {
         boolean shouldFilterBySubscriptionNames = CollectionUtils.isNotEmpty(subscriptionNames);
         boolean shouldFilterByQualifiedTopicNames = CollectionUtils.isNotEmpty(qualifiedTopicNames);
 
@@ -353,10 +358,13 @@ public class SubscriptionService {
             subscriptionStream = subscriptionStream.filter(s -> filterBySubscriptionNames(subscriptionNames, s.getName()));
         }
         if (shouldFilterByQualifiedTopicNames) {
-            subscriptionStream = subscriptionStream.filter(s -> filterByQualifiedTopicNames(qualifiedTopicNames, s.getQualifiedTopicName()));
+            subscriptionStream =
+                    subscriptionStream.filter(s -> filterByQualifiedTopicNames(qualifiedTopicNames, s.getQualifiedTopicName()));
         }
 
-        return subscriptionStream.map(s -> CompletableFuture.supplyAsync(() -> getUnhealthy(s), subscriptionHealthCheckExecutorService)).collect(toList());
+        return subscriptionStream
+                .map(s -> CompletableFuture.supplyAsync(() -> getUnhealthy(s), subscriptionHealthCheckExecutorService))
+                .collect(toList());
     }
 
     private boolean filterBySubscriptionNames(List<String> subscriptionNames, String subscriptionName) {

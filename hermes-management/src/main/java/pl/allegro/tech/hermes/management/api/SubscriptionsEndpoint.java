@@ -14,14 +14,15 @@ import pl.allegro.tech.hermes.api.SubscriptionHealth;
 import pl.allegro.tech.hermes.api.SubscriptionMetrics;
 import pl.allegro.tech.hermes.api.Topic;
 import pl.allegro.tech.hermes.api.TopicName;
-import pl.allegro.tech.hermes.management.api.auth.ManagementRights;
+import pl.allegro.tech.hermes.management.api.auth.HermesSecurityAwareRequestUser;
 import pl.allegro.tech.hermes.management.api.auth.Roles;
-import pl.allegro.tech.hermes.management.domain.auth.RequestUser;
 import pl.allegro.tech.hermes.management.domain.subscription.SubscriptionService;
 import pl.allegro.tech.hermes.management.domain.topic.TopicService;
 import pl.allegro.tech.hermes.management.infrastructure.kafka.MultiDCAwareService;
 import pl.allegro.tech.hermes.management.infrastructure.kafka.MultiDCOffsetChangeSummary;
 
+import java.util.List;
+import java.util.Optional;
 import javax.annotation.security.RolesAllowed;
 import javax.validation.Valid;
 import javax.ws.rs.Consumes;
@@ -38,9 +39,6 @@ import javax.ws.rs.QueryParam;
 import javax.ws.rs.container.ContainerRequestContext;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.Response;
-import javax.ws.rs.core.SecurityContext;
-import java.util.List;
-import java.util.Optional;
 
 import static javax.ws.rs.core.MediaType.APPLICATION_JSON;
 import static javax.ws.rs.core.Response.Status.NOT_FOUND;
@@ -53,17 +51,14 @@ public class SubscriptionsEndpoint {
     private final SubscriptionService subscriptionService;
     private final TopicService topicService;
     private final MultiDCAwareService multiDCAwareService;
-    private final ManagementRights managementRights;
 
     @Autowired
     public SubscriptionsEndpoint(SubscriptionService subscriptionService,
                                  TopicService topicService,
-                                 MultiDCAwareService multiDCAwareService,
-                                 ManagementRights managementRights) {
+                                 MultiDCAwareService multiDCAwareService) {
         this.subscriptionService = subscriptionService;
         this.topicService = topicService;
         this.multiDCAwareService = multiDCAwareService;
-        this.managementRights = managementRights;
     }
 
     @GET
@@ -73,9 +68,9 @@ public class SubscriptionsEndpoint {
             @PathParam("topicName") String qualifiedTopicName,
             @DefaultValue("false") @QueryParam("tracked") boolean tracked) {
 
-        return tracked ?
-                subscriptionService.listTrackedSubscriptionNames(fromQualifiedName(qualifiedTopicName)) :
-                subscriptionService.listSubscriptionNames(fromQualifiedName(qualifiedTopicName));
+        return tracked
+                ? subscriptionService.listTrackedSubscriptionNames(fromQualifiedName(qualifiedTopicName))
+                : subscriptionService.listSubscriptionNames(fromQualifiedName(qualifiedTopicName));
     }
 
     @POST
@@ -96,8 +91,11 @@ public class SubscriptionsEndpoint {
     public Response create(@PathParam("topicName") String qualifiedTopicName,
                            Subscription subscription,
                            @Context ContainerRequestContext requestContext) {
-        subscriptionService.createSubscription(subscription, RequestUser.fromSecurityContext(requestContext.getSecurityContext()),
-                managementRights.getSubscriptionCreatorRights(requestContext), qualifiedTopicName);
+        subscriptionService.createSubscription(
+                subscription,
+                new HermesSecurityAwareRequestUser(requestContext),
+                qualifiedTopicName
+        );
         return responseStatus(Response.Status.CREATED);
     }
 
@@ -121,6 +119,7 @@ public class SubscriptionsEndpoint {
 
     @GET
     @Produces(APPLICATION_JSON)
+    @RolesAllowed({Roles.ADMIN, Roles.TOPIC_OWNER, Roles.SUBSCRIPTION_OWNER})
     @Path("/{subscriptionName}/undelivered/last")
     @ApiOperation(value = "Get latest undelivered message", response = SentMessageTrace.class, httpMethod = HttpMethod.GET)
     public Response getLatestUndeliveredMessage(@PathParam("topicName") String qualifiedTopicName,
@@ -134,6 +133,7 @@ public class SubscriptionsEndpoint {
 
     @GET
     @Produces(APPLICATION_JSON)
+    @RolesAllowed({Roles.ADMIN, Roles.TOPIC_OWNER, Roles.SUBSCRIPTION_OWNER})
     @Path("/{subscriptionName}/undelivered")
     @ApiOperation(value = "Get latest undelivered messages", response = List.class, httpMethod = HttpMethod.GET)
     public Response getLatestUndeliveredMessages(@PathParam("topicName") String qualifiedTopicName,
@@ -156,7 +156,8 @@ public class SubscriptionsEndpoint {
     @GET
     @Produces(APPLICATION_JSON)
     @Path("/{subscriptionName}/metrics/persistent")
-    @ApiOperation(value = "Get persistent subscription metrics", response = PersistentSubscriptionMetrics.class, httpMethod = HttpMethod.GET)
+    @ApiOperation(
+            value = "Get persistent subscription metrics", response = PersistentSubscriptionMetrics.class, httpMethod = HttpMethod.GET)
     public PersistentSubscriptionMetrics getPersistentMetrics(@PathParam("topicName") String qualifiedTopicName,
                                                               @PathParam("subscriptionName") String subscriptionName) {
         return subscriptionService.getPersistentSubscriptionMetrics(fromQualifiedName(qualifiedTopicName), subscriptionName);
@@ -179,9 +180,13 @@ public class SubscriptionsEndpoint {
     public Response updateState(@PathParam("topicName") String qualifiedTopicName,
                                 @PathParam("subscriptionName") String subscriptionName,
                                 Subscription.State state,
-                                @Context SecurityContext securityContext) {
-        subscriptionService.updateSubscriptionState(fromQualifiedName(qualifiedTopicName),
-                subscriptionName, state, RequestUser.fromSecurityContext(securityContext));
+                                @Context ContainerRequestContext requestContext) {
+        subscriptionService.updateSubscriptionState(
+                fromQualifiedName(qualifiedTopicName),
+                subscriptionName,
+                state,
+                new HermesSecurityAwareRequestUser(requestContext)
+        );
         return responseStatus(OK);
     }
 
@@ -191,9 +196,12 @@ public class SubscriptionsEndpoint {
     @ApiOperation(value = "Remove subscription", httpMethod = HttpMethod.DELETE)
     public Response remove(@PathParam("topicName") String qualifiedTopicName,
                            @PathParam("subscriptionName") String subscriptionId,
-                           @Context SecurityContext securityContext) {
-        subscriptionService.removeSubscription(fromQualifiedName(qualifiedTopicName),
-                subscriptionId, RequestUser.fromSecurityContext(securityContext));
+                           @Context ContainerRequestContext requestContext) {
+        subscriptionService.removeSubscription(
+                fromQualifiedName(qualifiedTopicName),
+                subscriptionId,
+                new HermesSecurityAwareRequestUser(requestContext)
+        );
         return responseStatus(OK);
     }
 
@@ -205,9 +213,13 @@ public class SubscriptionsEndpoint {
     public Response update(@PathParam("topicName") String qualifiedTopicName,
                            @PathParam("subscriptionName") String subscriptionName,
                            PatchData patch,
-                           @Context SecurityContext securityContext) {
-        subscriptionService.updateSubscription(TopicName.fromQualifiedName(qualifiedTopicName),
-                subscriptionName, patch, RequestUser.fromSecurityContext(securityContext));
+                           @Context ContainerRequestContext requestContext) {
+        subscriptionService.updateSubscription(
+                TopicName.fromQualifiedName(qualifiedTopicName),
+                subscriptionName,
+                patch,
+                new HermesSecurityAwareRequestUser(requestContext)
+        );
         return responseStatus(OK);
     }
 
@@ -221,14 +233,15 @@ public class SubscriptionsEndpoint {
                                @PathParam("subscriptionName") String subscriptionName,
                                @DefaultValue("false") @QueryParam("dryRun") boolean dryRun,
                                @Valid OffsetRetransmissionDate offsetRetransmissionDate,
-                               @Context SecurityContext securityContext) {
+                               @Context ContainerRequestContext requestContext) {
 
         MultiDCOffsetChangeSummary summary = multiDCAwareService.moveOffset(
                 topicService.getTopicDetails(TopicName.fromQualifiedName(qualifiedTopicName)),
                 subscriptionName,
                 offsetRetransmissionDate.getRetransmissionDate().toInstant().toEpochMilli(),
                 dryRun,
-                RequestUser.fromSecurityContext(securityContext));
+                new HermesSecurityAwareRequestUser(requestContext)
+        );
 
         return Response.status(OK).entity(summary).build();
     }

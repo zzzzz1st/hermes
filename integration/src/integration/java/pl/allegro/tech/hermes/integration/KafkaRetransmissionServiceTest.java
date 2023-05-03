@@ -15,12 +15,11 @@ import pl.allegro.tech.hermes.test.helper.avro.AvroUser;
 import pl.allegro.tech.hermes.test.helper.endpoint.RemoteServiceEndpoint;
 import pl.allegro.tech.hermes.test.helper.message.TestMessage;
 
-import javax.ws.rs.core.Response;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.List;
+import javax.ws.rs.core.Response;
 
-import static java.util.stream.Collectors.summingLong;
 import static javax.ws.rs.core.Response.Status.Family.SUCCESSFUL;
 import static javax.ws.rs.core.Response.Status.OK;
 import static pl.allegro.tech.hermes.api.PatchData.patchData;
@@ -33,7 +32,7 @@ public class KafkaRetransmissionServiceTest extends IntegrationTest {
 
     private RemoteServiceEndpoint remoteService;
     private final AvroUser user = new AvroUser();
-    private Clock clock = Clock.systemDefaultZone();
+    private final Clock clock = Clock.systemDefaultZone();
 
     @BeforeMethod
     public void initializeAlways() {
@@ -51,7 +50,7 @@ public class KafkaRetransmissionServiceTest extends IntegrationTest {
 
         sendMessagesOnTopic(topic, 4);
         Thread.sleep(1000); //wait 1s because our date time format has seconds precision
-        OffsetRetransmissionDate retransmissionDate = new OffsetRetransmissionDate(OffsetDateTime.now());
+        final OffsetRetransmissionDate retransmissionDate = new OffsetRetransmissionDate(OffsetDateTime.now());
         Thread.sleep(1000);
         sendMessagesOnTopic(topic, 2);
         wait.untilConsumerCommitsOffset(topic, subscription);
@@ -107,7 +106,7 @@ public class KafkaRetransmissionServiceTest extends IntegrationTest {
         wait.untilConsumerCommitsOffset(topic, subscription.getName());
 
         Thread.sleep(1000); //wait 1s because our date time format has seconds precision
-        OffsetRetransmissionDate retransmissionDate = new OffsetRetransmissionDate(OffsetDateTime.now());
+        final OffsetRetransmissionDate retransmissionDate = new OffsetRetransmissionDate(OffsetDateTime.now());
 
         sendMessagesOnTopic(topic, 1);
         wait.untilConsumerCommitsOffset(topic, subscription.getName());
@@ -126,7 +125,9 @@ public class KafkaRetransmissionServiceTest extends IntegrationTest {
         wait.untilConsumerCommitsOffset(topic, subscription.getName());
 
         // when
-        Response response = management.subscription().retransmit(topic.getQualifiedName(), subscription.getName(), true, retransmissionDate);
+        Response response = management.subscription().retransmit(
+                topic.getQualifiedName(), subscription.getName(), true, retransmissionDate
+        );
 
         // then
         assertThat(response).hasStatus(OK);
@@ -135,8 +136,8 @@ public class KafkaRetransmissionServiceTest extends IntegrationTest {
                 summary.getPartitionOffsetListPerBrokerName().get(PRIMARY_KAFKA_CLUSTER_NAME)
         );
 
-        assertThat(offsets.jsonPartitionOffsets.stream().collect(summingLong(PartitionOffset::getOffset))).isEqualTo(1);
-        assertThat(offsets.avroPartitionOffsets.stream().collect(summingLong(PartitionOffset::getOffset))).isEqualTo(0);
+        assertThat((Long) offsets.jsonPartitionOffsets.stream().mapToLong(PartitionOffset::getOffset).sum()).isEqualTo(1);
+        assertThat((Long) offsets.avroPartitionOffsets.stream().mapToLong(PartitionOffset::getOffset).sum()).isEqualTo(0);
     }
 
     private void sendAvroMessageOnTopic(Topic topic, TestMessage message) {

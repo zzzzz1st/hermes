@@ -3,6 +3,7 @@ package pl.allegro.tech.hermes.frontend.publishing.handlers;
 import com.codahale.metrics.Metered;
 import pl.allegro.tech.hermes.api.TopicName;
 
+import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -19,15 +20,15 @@ public class DynamicThroughputLimiter implements ThroughputLimiter, Runnable {
     private final Metered globalThroughputMeter;
 
     private final ScheduledExecutorService executor;
-    private final int checkInterval;
+    private final Duration checkInterval;
 
-    private ConcurrentHashMap<TopicName, Throughput> users = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<TopicName, Throughput> users = new ConcurrentHashMap<>();
 
     public DynamicThroughputLimiter(long max,
                                     long threshold,
                                     long desired,
                                     double idleThreshold,
-                                    int checkInterval,
+                                    Duration checkInterval,
                                     Metered globalThroughput,
                                     ScheduledExecutorService executor) {
         this.max = max;
@@ -54,7 +55,7 @@ public class DynamicThroughputLimiter implements ThroughputLimiter, Runnable {
 
     @Override
     public void start() {
-        executor.scheduleAtFixedRate(this, checkInterval, checkInterval, TimeUnit.SECONDS);
+        executor.scheduleAtFixedRate(this, checkInterval.toSeconds(), checkInterval.toSeconds(), TimeUnit.SECONDS);
     }
 
     @Override
@@ -68,7 +69,7 @@ public class DynamicThroughputLimiter implements ThroughputLimiter, Runnable {
         users.entrySet().removeIf(entry -> entry.getValue().getOneMinuteRate() <= idleThreshold);
         int userCount = users.size();
         if (userCount > 0) {
-            long total = users.reduceValuesToLong(Long.MAX_VALUE, Throughput::getRoundedOneMinuteRate, 0, ((left, right) -> left + right));
+            long total = users.reduceValuesToLong(Long.MAX_VALUE, Throughput::getRoundedOneMinuteRate, 0, (Long::sum));
             long mean = total / userCount;
             long desiredMean = desired / userCount;
             users.entrySet()

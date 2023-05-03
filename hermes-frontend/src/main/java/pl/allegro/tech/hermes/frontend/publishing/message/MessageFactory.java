@@ -7,14 +7,11 @@ import org.apache.avro.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pl.allegro.tech.hermes.api.Topic;
-import pl.allegro.tech.hermes.common.config.ConfigFactory;
-import pl.allegro.tech.hermes.common.config.Configs;
 import pl.allegro.tech.hermes.common.http.MessageMetadataHeaders;
 import pl.allegro.tech.hermes.common.message.wrapper.AvroInvalidMetadataException;
 import pl.allegro.tech.hermes.common.message.wrapper.MessageContentWrapper;
 import pl.allegro.tech.hermes.common.message.wrapper.UnsupportedContentTypeException;
 import pl.allegro.tech.hermes.common.message.wrapper.WrappingException;
-import pl.allegro.tech.hermes.common.metric.timer.StartedTimersPair;
 import pl.allegro.tech.hermes.frontend.publishing.avro.AvroMessage;
 import pl.allegro.tech.hermes.frontend.publishing.handlers.AttachmentContent;
 import pl.allegro.tech.hermes.frontend.publishing.metadata.HeadersPropagator;
@@ -25,7 +22,6 @@ import pl.allegro.tech.hermes.schema.SchemaRepository;
 import pl.allegro.tech.hermes.schema.SchemaVersion;
 import tech.allegro.schema.json2avro.converter.AvroConversionException;
 
-import javax.inject.Inject;
 import java.time.Clock;
 import java.util.Map;
 import java.util.Optional;
@@ -47,31 +43,28 @@ public class MessageFactory {
     private final Clock clock;
     private final boolean schemaIdHeaderEnabled;
 
-    @Inject
     public MessageFactory(MessageValidators validators,
                           AvroEnforcer enforcer,
                           SchemaRepository schemaRepository,
                           HeadersPropagator headersPropagator,
                           MessageContentWrapper messageContentWrapper,
                           Clock clock,
-                          ConfigFactory configFactory) {
+                          boolean schemaIdHeaderEnabled) {
         this.validators = validators;
         this.enforcer = enforcer;
         this.messageContentWrapper = messageContentWrapper;
         this.schemaRepository = schemaRepository;
         this.headersPropagator = headersPropagator;
         this.clock = clock;
-        this.schemaIdHeaderEnabled = configFactory.getBooleanProperty(Configs.SCHEMA_ID_HEADER_ENABLED);
+        this.schemaIdHeaderEnabled = schemaIdHeaderEnabled;
     }
 
     public Message create(HeaderMap headerMap, AttachmentContent attachment) {
-        try (StartedTimersPair startedTimersPair = attachment.getCachedTopic().startMessageCreationTimers()) {
-            return create(
-                    headerMap,
-                    attachment.getTopic(),
-                    attachment.getMessageId(),
-                    attachment.getMessageContent());
-        }
+        return create(
+                headerMap,
+                attachment.getTopic(),
+                attachment.getMessageId(),
+                attachment.getMessageContent());
     }
 
     private Message create(HeaderMap headerMap, Topic topic, String messageId, byte[] messageContent) {
@@ -99,26 +92,28 @@ public class MessageFactory {
     }
 
     private JsonMessage createJsonMessage(HeaderMap headerMap, String messageId, byte[] messageContent, long timestamp) {
+        Map<String, String> extraRequestHeaders = headersPropagator.extract(toHeadersMap(headerMap));
         JsonMessage message = new JsonMessage(messageId, messageContent, timestamp, extractPartitionKey(headerMap));
         byte[] wrapped = messageContentWrapper
-                .wrapJson(message.getData(), message.getId(), message.getTimestamp(), headersPropagator.extract(toHeadersMap(headerMap)));
+                .wrapJson(message.getData(), message.getId(), message.getTimestamp(), extraRequestHeaders);
         return message.withDataReplaced(wrapped);
     }
 
     private CompiledSchema<Schema> getCompiledSchemaBySchemaVersion(HeaderMap headerMap, Topic topic) {
         return extractSchemaVersion(headerMap)
-            .map(version -> schemaRepository.getAvroSchema(topic, version))
-            .orElseGet(() -> schemaRepository.getLatestAvroSchema(topic));
+                .map(version -> schemaRepository.getAvroSchema(topic, version))
+                .orElseGet(() -> schemaRepository.getLatestAvroSchema(topic));
     }
 
     private CompiledSchema<Schema> getCompiledSchema(HeaderMap headerMap, Topic topic) {
         return extractSchemaId(headerMap)
-            .map(id -> schemaRepository.getAvroSchema(topic, id))
-            .orElseGet(() -> getCompiledSchemaBySchemaVersion(headerMap, topic));
+                .map(id -> schemaRepository.getAvroSchema(topic, id))
+                .orElseGet(() -> getCompiledSchemaBySchemaVersion(headerMap, topic));
     }
 
     private AvroMessage createAvroMessage(HeaderMap headerMap, Topic topic, String messageId, byte[] messageContent, long timestamp) {
         CompiledSchema<Schema> schema = getCompiledSchema(headerMap, topic);
+        Map<String, String> extraRequestHeaders = headersPropagator.extract(toHeadersMap(headerMap));
 
         AvroMessage message = new AvroMessage(
                 messageId,
@@ -129,7 +124,7 @@ public class MessageFactory {
 
         validators.check(topic, message);
         byte[] wrapped = messageContentWrapper.wrapAvro(message.getData(), message.getId(), message.getTimestamp(),
-                topic, schema, headersPropagator.extract(toHeadersMap(headerMap)));
+                topic, schema, extraRequestHeaders);
         return message.withDataReplaced(wrapped);
     }
 
@@ -168,7 +163,7 @@ public class MessageFactory {
         return headerMap.getFirst(MessageMetadataHeaders.PARTITION_KEY.getName());
     }
 
-    private Map<String, String> toHeadersMap(HeaderMap headerMap) {
+    private static Map<String, String> toHeadersMap(HeaderMap headerMap) {
         return stream(spliteratorUnknownSize(headerMap.iterator(), 0), false)
                 .collect(toMap(
                         h -> h.getHeaderName().toString(),

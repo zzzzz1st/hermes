@@ -9,9 +9,17 @@ Mocking is provided by `HermesMock` class, which consists of 3 parts:
 - `HermesMockExpect`
 - `HermesMockQuery`
 
+##### HermesMock
+
+- `<T> void resetReceivedAvroRequests(String topicName, Schema schema, Class<T> clazz, Predicate<T> predicate)` - resets requests received by Avro topic matching given predicate
+
+- `<T> void resetReceivedJsonRequests(String topicName, Class<T> clazz, Predicate<T> predicate)` - resets requests received by Json topic matching given predicate
+
+
 ##### HermesMockDefine
 
-Is responsible for defining new topics on Hermes, provides the following methods:
+Is responsible for defining new topics on Hermes, provides the following methods.
+Both `jsonTopic` and `avroTopic` methods return an StubMapping object: 
 
 - `jsonTopic(String topicName)` - defines a JSON topic.
 
@@ -32,6 +40,8 @@ with a given response code.
 Avro topic with predicate to match request by field in schema
 - `jsonTopic(String topicName, Response response, Class<T> clazz, Predicate<T> predicate)` - defines a
  Json topic with predicate to match request by field
+
+- `removeStubMapping(StubMapping stubMapping)` - removes defined stub mapping 
 
 `Response` allows to define the following elements:
 - `statusCode` - a HTTP response code

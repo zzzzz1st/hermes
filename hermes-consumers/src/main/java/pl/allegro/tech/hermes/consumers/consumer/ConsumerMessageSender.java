@@ -1,12 +1,12 @@
 package pl.allegro.tech.hermes.consumers.consumer;
 
+import com.codahale.metrics.Timer;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.eclipse.jetty.http.HttpStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pl.allegro.tech.hermes.api.Subscription;
-import pl.allegro.tech.hermes.common.metric.HermesMetrics;
-import pl.allegro.tech.hermes.common.metric.timer.ConsumerLatencyTimer;
+import pl.allegro.tech.hermes.consumers.consumer.load.SubscriptionLoadRecorder;
 import pl.allegro.tech.hermes.consumers.consumer.rate.InflightsPool;
 import pl.allegro.tech.hermes.consumers.consumer.rate.SerialConsumerRateLimiter;
 import pl.allegro.tech.hermes.consumers.consumer.result.ErrorHandler;
@@ -19,7 +19,6 @@ import pl.allegro.tech.hermes.consumers.consumer.sender.timeout.FutureAsyncTimeo
 
 import java.net.URI;
 import java.time.Clock;
-import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -38,21 +37,21 @@ public class ConsumerMessageSender {
     private final ExecutorService deliveryReportingExecutor;
     private final List<SuccessHandler> successHandlers;
     private final List<ErrorHandler> errorHandlers;
-    private final SerialConsumerRateLimiter rateLimiter;
     private final MessageSenderFactory messageSenderFactory;
     private final Clock clock;
     private final InflightsPool inflight;
-    private final FutureAsyncTimeout<MessageSendingResult> async;
+    private final SubscriptionLoadRecorder loadRecorder;
+    private final Timer consumerLatencyTimer;
+    private final SerialConsumerRateLimiter rateLimiter;
+    private final FutureAsyncTimeout async;
     private final int asyncTimeoutMs;
-    private final HermesMetrics hermesMetrics;
 
-    private int requestTimeoutMs;
-    private ConsumerLatencyTimer consumerLatencyTimer;
     private MessageSender messageSender;
     private Subscription subscription;
 
     private ScheduledExecutorService retrySingleThreadExecutor;
     private volatile boolean running = true;
+
 
     public ConsumerMessageSender(Subscription subscription,
                                  MessageSenderFactory messageSenderFactory,
@@ -61,29 +60,30 @@ public class ConsumerMessageSender {
                                  SerialConsumerRateLimiter rateLimiter,
                                  ExecutorService deliveryReportingExecutor,
                                  InflightsPool inflight,
-                                 HermesMetrics hermesMetrics,
+                                 SubscriptionMetrics metrics,
                                  int asyncTimeoutMs,
-                                 FutureAsyncTimeout<MessageSendingResult> futureAsyncTimeout,
-                                 Clock clock) {
+                                 FutureAsyncTimeout futureAsyncTimeout,
+                                 Clock clock,
+                                 SubscriptionLoadRecorder loadRecorder) {
         this.deliveryReportingExecutor = deliveryReportingExecutor;
         this.successHandlers = successHandlers;
         this.errorHandlers = errorHandlers;
-        this.rateLimiter = rateLimiter;
         this.messageSenderFactory = messageSenderFactory;
         this.clock = clock;
-        this.messageSender = messageSenderFactory.create(subscription);
+        this.loadRecorder = loadRecorder;
+        this.async = futureAsyncTimeout;
+        this.rateLimiter = rateLimiter;
+        this.asyncTimeoutMs = asyncTimeoutMs;
+        this.messageSender = messageSender(subscription);
         this.subscription = subscription;
         this.inflight = inflight;
-        this.async = futureAsyncTimeout;
-        this.requestTimeoutMs = subscription.getSerialSubscriptionPolicy().getRequestTimeout();
-        this.asyncTimeoutMs = asyncTimeoutMs;
-        this.hermesMetrics = hermesMetrics;
-        this.consumerLatencyTimer = hermesMetrics.latencyTimer(subscription);
+        this.consumerLatencyTimer = metrics.subscriptionLatencyTimer();
     }
 
     public void initialize() {
         running = true;
-        ThreadFactory threadFactory = new ThreadFactoryBuilder().setNameFormat(subscription.getQualifiedName() + "-retry-executor-%d").build();
+        ThreadFactory threadFactory =
+                new ThreadFactoryBuilder().setNameFormat(subscription.getQualifiedName() + "-retry-executor-%d").build();
         this.retrySingleThreadExecutor = Executors.newScheduledThreadPool(1, threadFactory);
     }
 
@@ -119,23 +119,38 @@ public class ConsumerMessageSender {
         return Math.max(delay, INTEGER_ZERO);
     }
 
+
     /**
      * Method is calling MessageSender and is registering listeners to handle response.
      * Main responsibility of this method is that no message will be fully processed or rejected without release on semaphore.
      */
     private void sendMessage(final Message message) {
-        rateLimiter.acquire();
-        ConsumerLatencyTimer.Context timer = consumerLatencyTimer.time();
-        CompletableFuture<MessageSendingResult> response = async.within(
-                messageSender.send(message),
-                Duration.ofMillis(asyncTimeoutMs + requestTimeoutMs)
-        );
+        loadRecorder.recordSingleOperation();
+        Timer.Context timer = consumerLatencyTimer.time();
+        CompletableFuture<MessageSendingResult> response = messageSender.send(message);
+
         response.thenAcceptAsync(new ResponseHandlingListener(message, timer), deliveryReportingExecutor)
                 .exceptionally(e -> {
-                    logger.error("An error occurred while handling message sending response of subscription {} [partition={}, offset={}, id={}]",
+                    logger.error(
+                            "An error occurred while handling message sending response of subscription {} [partition={}, offset={}, id={}]",
                             subscription.getQualifiedName(), message.getPartition(), message.getOffset(), message.getId(), e);
                     return null;
                 });
+    }
+
+    private MessageSender messageSender(Subscription subscription) {
+        Integer requestTimeoutMs = subscription.getSerialSubscriptionPolicy().getRequestTimeout();
+        ResilientMessageSender resilientMessageSender = new ResilientMessageSender(
+                this.rateLimiter,
+                subscription,
+                this.async,
+                requestTimeoutMs,
+                this.asyncTimeoutMs
+        );
+
+        return this.messageSenderFactory.create(
+                subscription, resilientMessageSender
+        );
     }
 
     public void updateSubscription(Subscription newSubscription) {
@@ -153,14 +168,13 @@ public class ConsumerMessageSender {
         );
 
         this.subscription = newSubscription;
-        this.requestTimeoutMs = newSubscription.getSerialSubscriptionPolicy().getRequestTimeout();
 
         boolean httpClientChanged = this.subscription.isHttp2Enabled() != newSubscription.isHttp2Enabled();
 
         if (endpointUpdated || subscriptionPolicyUpdated || endpointAddressResolverMetadataChanged
                 || oAuthPolicyChanged || httpClientChanged) {
             this.messageSender.stop();
-            this.messageSender = messageSenderFactory.create(newSubscription);
+            this.messageSender = messageSender(newSubscription);
         }
     }
 
@@ -171,18 +185,8 @@ public class ConsumerMessageSender {
     }
 
     private void handleFailedSending(Message message, MessageSendingResult result) {
-        registerResultInRateLimiter(result);
         retrySending(message, result);
         errorHandlers.forEach(h -> h.handleFailed(message, subscription, result));
-    }
-
-    private void registerResultInRateLimiter(MessageSendingResult result) {
-        if (result.ignoreInRateCalculation(subscription.getSerialSubscriptionPolicy().isRetryClientErrors(),
-                subscription.hasOAuthPolicy())) {
-            rateLimiter.registerSuccessfulSending();
-        } else {
-            rateLimiter.registerFailedSending();
-        }
     }
 
     private void retrySending(Message message, MessageSendingResult result) {
@@ -228,13 +232,8 @@ public class ConsumerMessageSender {
     }
 
     private void handleMessageSendingSuccess(Message message, MessageSendingResult result) {
-        rateLimiter.registerSuccessfulSending();
         inflight.release();
         successHandlers.forEach(h -> h.handleSuccess(message, subscription, result));
-    }
-
-    private void decrementInflightMessageCounterAfterSenderShutdown() {
-        hermesMetrics.decrementInflightCounter(subscription);
     }
 
     private boolean messageSentSucceeded(MessageSendingResult result) {
@@ -257,16 +256,17 @@ public class ConsumerMessageSender {
     class ResponseHandlingListener implements java.util.function.Consumer<MessageSendingResult> {
 
         private final Message message;
-        private final ConsumerLatencyTimer.Context timer;
+        private final Timer.Context timer;
 
-        public ResponseHandlingListener(Message message, ConsumerLatencyTimer.Context timer) {
+        public ResponseHandlingListener(Message message, Timer.Context timer) {
             this.message = message;
             this.timer = timer;
         }
 
         @Override
         public void accept(MessageSendingResult result) {
-            timer.stop();
+            timer.close();
+            loadRecorder.recordSingleOperation();
             if (running) {
                 if (result.succeeded()) {
                     handleMessageSendingSuccess(message, result);
@@ -274,9 +274,8 @@ public class ConsumerMessageSender {
                     handleFailedSending(message, result);
                 }
             } else {
-                decrementInflightMessageCounterAfterSenderShutdown();
-                logger.warn("Process of subscription {} is not running. " +
-                                "Ignoring sending message result [successful={}, partition={}, offset={}, id={}]",
+                logger.warn("Process of subscription {} is not running. "
+                                + "Ignoring sending message result [successful={}, partition={}, offset={}, id={}]",
                         subscription.getQualifiedName(), result.succeeded(), message.getPartition(),
                         message.getOffset(), message.getId());
             }

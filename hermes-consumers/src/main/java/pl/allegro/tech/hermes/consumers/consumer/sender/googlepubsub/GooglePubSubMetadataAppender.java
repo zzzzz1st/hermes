@@ -3,14 +3,12 @@ package pl.allegro.tech.hermes.consumers.consumer.sender.googlepubsub;
 import com.google.common.collect.ImmutableMap;
 import com.google.pubsub.v1.PubsubMessage;
 import org.apache.commons.lang3.tuple.Pair;
-import pl.allegro.tech.hermes.api.Header;
 import pl.allegro.tech.hermes.consumers.consumer.Message;
 import pl.allegro.tech.hermes.consumers.consumer.trace.MetadataAppender;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 public class GooglePubSubMetadataAppender implements MetadataAppender<PubsubMessage> {
 
@@ -23,18 +21,12 @@ public class GooglePubSubMetadataAppender implements MetadataAppender<PubsubMess
 
     @Override
     public PubsubMessage append(PubsubMessage target, Message message) {
-
-        final Map<String, String> additionalHeaders = message.getAdditionalHeaders().stream().collect(
-                Collectors.toMap(Header::getName, Header::getValue));
-
         return PubsubMessage.newBuilder(target)
-                .putAllAttributes(additionalHeaders)
-                .putAllAttributes(message.getExternalMetadata())
                 .putAllAttributes(createMessageAttributes(message))
                 .build();
     }
 
-    private Map<String, String> createMessageAttributes(Message message) {
+    protected Map<String, String> createMessageAttributes(Message message) {
         Optional<Pair<String, String>> schemaIdAndVersion = message.getSchema().map(s ->
                 Pair.of(String.valueOf(s.getId().value()), String.valueOf(s.getVersion().value())));
 

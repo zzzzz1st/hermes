@@ -1,12 +1,11 @@
 package pl.allegro.tech.hermes.consumers.consumer.result
 
 import com.codahale.metrics.MetricRegistry
-import com.netflix.config.DynamicPropertyFactory
 import pl.allegro.tech.hermes.api.Subscription
 import pl.allegro.tech.hermes.api.TrackingMode
-import pl.allegro.tech.hermes.common.config.ConfigFactory
 import pl.allegro.tech.hermes.common.metric.HermesMetrics
 import pl.allegro.tech.hermes.consumers.consumer.Message
+import pl.allegro.tech.hermes.consumers.consumer.SubscriptionMetrics
 import pl.allegro.tech.hermes.consumers.consumer.offset.OffsetQueue
 import pl.allegro.tech.hermes.consumers.consumer.sender.MessageSendingResult
 import pl.allegro.tech.hermes.consumers.test.MessageBuilder
@@ -20,7 +19,7 @@ class DefaultSuccessHandlerTest extends Specification {
 
     private OffsetQueue offsetQueue = new OffsetQueue(
             new HermesMetrics(new MetricRegistry(), new PathsCompiler("host")),
-            new ConfigFactory(DynamicPropertyFactory.getInstance())
+            200_000
     )
 
     private InMemoryLogRepository sendingTracker = new InMemoryLogRepository()
@@ -30,7 +29,7 @@ class DefaultSuccessHandlerTest extends Specification {
     private Subscription subscription = subscription('group.topic', 'subscription')
             .withTrackingMode(TrackingMode.TRACK_ALL).build()
 
-    private DefaultSuccessHandler handler = new DefaultSuccessHandler(offsetQueue, Stub(HermesMetrics), trackers)
+    private DefaultSuccessHandler handler = new DefaultSuccessHandler(offsetQueue, Stub(SubscriptionMetrics), trackers)
 
     def "should commit message and save tracking information on message success"() {
         given:
